@@ -33,7 +33,7 @@ export function Button({
     <button
       className={cn(
         // Controls speak in the drafting register: mono, uppercase, tracked.
-        'inline-flex items-center justify-center gap-2 rounded-[3px] font-mono uppercase tracking-[0.1em]',
+        'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[3px] font-mono uppercase tracking-[0.1em]',
         'transition-colors disabled:cursor-not-allowed disabled:opacity-40',
         VARIANTS[variant],
         SIZES[size],

@@ -36,7 +36,10 @@ export function Login() {
   }
 
   return (
-    <div className="mx-auto grid max-w-4xl items-center gap-12 py-8 md:grid-cols-[1.1fr_1fr] md:gap-16 md:py-16">
+    // content-center as well as items-center: with a min-height the single grid
+    // row would otherwise sit at the top and leave the lower half of the
+    // viewport empty.
+    <div className="mx-auto grid max-w-4xl items-center gap-12 py-8 md:min-h-[66vh] md:grid-cols-[1.1fr_1fr] md:content-center md:gap-16 md:py-10">
       {/* Hero: the elevation drawing states the product's thesis before any copy does. */}
       <div>
         <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">

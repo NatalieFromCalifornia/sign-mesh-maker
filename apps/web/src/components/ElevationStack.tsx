@@ -46,8 +46,11 @@ const TOP_MM = Math.max(...STRATA.map((s) => s.toMm));
 
 export function ElevationStack({ className }: { className?: string }) {
   return (
+    // Cropped tight to the drawing's ink: a full-height box left roughly a
+    // third of the frame empty above the stack, pushing the device away from
+    // its own caption.
     <svg
-      viewBox="0 0 320 186"
+      viewBox="0 64 320 116"
       className={cn('w-full', className)}
       role="img"
       aria-label="Side elevation of a printed sign: a 2 mm base with three colored layers stepping up to 5 mm."
