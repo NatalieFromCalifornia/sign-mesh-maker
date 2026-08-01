@@ -14,12 +14,16 @@ npm run dev
 
 ## Structure
 
-- `apps/web` — React + three.js frontend (deployed to Cloudflare Pages)
-- `functions` — Firebase Cloud Functions (server-side processing, only if the
-  client-side vectorization/inpainting approach proves insufficient)
+- `apps/web` — React + three.js frontend (deployed to Cloudflare Pages). This
+  is the entire app — there is no backend. Vectorization, inpainting, and mesh
+  generation all run client-side in the browser.
 - `packages/shared` — shared TypeScript types (project/config schema)
-- `firestore.rules`, `storage.rules`, `firebase.json`, `firestore.indexes.json`
-  — Firebase project configuration
+- `firestore.rules`, `firebase.json`, `firestore.indexes.json` — Firebase
+  project configuration (Auth + Firestore only, Spark/free plan — no billing
+  account is ever attached; see `docs/requirements.md` §3)
+- `wrangler.jsonc` — Cloudflare deploy config; defines the assets directory
+  Cloudflare uploads (`apps/web/dist`) since Cloudflare's dashboard no longer
+  has a separate output-directory field
 
 ## Prerequisites (manual, one-time setup)
 

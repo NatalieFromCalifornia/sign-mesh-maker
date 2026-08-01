@@ -43,18 +43,20 @@ Users can log in with Google to save projects (SVG + settings + a preview thumbn
 | Frontend framework | React + TypeScript (Vite) | Fast dev server, good ecosystem for canvas/3D libs |
 | 3D preview & mesh building | three.js | Scene rendering, `STLExporter`, `BufferGeometry` construction |
 | 2D canvas editing (circle-to-remove, crop) | HTML5 Canvas / Konva.js | Konva simplifies shape drawing, selection, transforms |
-| Vectorization (raster → SVG) | `imagetracerjs` (client-side, no server needed) or `potrace` (Node, server-side via Cloud Function) | See §9.2 for tradeoffs |
-| Color quantization / palette detection | Custom k-means (or `quantize`/`node-vibrant`-style lib) on raw pixel data | See §9.1 |
-| Inpainting (object removal) | Cloud Function using OpenCV.js or a hosted inpainting API | See §9.3 — this is the least trivial piece, treat as its own milestone |
+| Vectorization (raster → SVG) | `imagetracerjs` (client-side, in-browser) | See §9.2 — this is the only tracer used; there is no server-side option in this architecture |
+| Color quantization / palette detection | Custom k-means (or `quantize`/`node-vibrant`-style lib) on raw pixel data | See §9.1, runs client-side |
+| Inpainting (object removal) | In-browser OpenCV.js (WASM) | See §9.3 — this is the least trivial piece, treat as its own milestone. Runs entirely client-side, no backend involved |
 | Polygon triangulation for extrusion | `earcut` | Standard for turning SVG paths into flat meshes for extrusion |
 | Path/CSG boolean ops (layer merging, gaps in flat mode) | `three-bvh-csg` or `manifold-3d` (WASM) | Needed to cut gaps between same-height flat layers cleanly |
-| Auth | Firebase Authentication (Google provider) | Matches stated requirement |
-| Database | Firebase Firestore | Project metadata, layer configs |
-| File storage | Firebase Storage | Original images, SVGs, thumbnails, generated STLs (or generate STL client-side and not store it) |
-| Hosting / CDN | Cloudflare Pages (static frontend) + Cloudflare Workers or Firebase Cloud Functions for backend tasks | Matches "my Cloudflare URL" requirement |
+| Auth | Firebase Authentication (Google provider) | Free on the Spark plan, no billing account needed |
+| Database | Firebase Firestore | Free on the Spark plan (quota-capped, not pay-as-you-go). Stores project metadata, layer configs, **and** the SVG + thumbnail data inline (see §6) |
+| Hosting / CDN | Cloudflare Pages (static frontend only) | Matches "my Cloudflare URL" requirement |
 | Repo / CI | GitHub + GitHub Actions | Build/test/deploy pipeline |
 
-**Key architecture decision to flag for the implementer:** Cloudflare Pages serves the static frontend, but Firebase Cloud Functions (Node) are the natural place for anything needing OpenCV/potrace/heavy image processing, since Cloudflare Workers don't support native binaries/WASM-heavy CV libraries as easily. Recommend: **frontend on Cloudflare Pages, backend processing on Firebase Cloud Functions (2nd gen), DB/Auth/Storage on Firebase.** Cloudflare Worker can act as a thin proxy/custom-domain router in front of Firebase if a unified domain is desired.
+**Key architecture decision:** This project intentionally stays on the Firebase **Spark (free) plan** — no billing account is ever attached. That rules out Firebase Storage and Firebase Cloud Functions, both of which now require the pay-as-you-go Blaze plan. The design below is built around that constraint rather than around it:
+- **No backend service at all.** Every processing step — inpainting, vectorization, mesh generation, STL export — runs entirely client-side in the browser. Cloudflare Pages serves nothing but static assets.
+- **No object storage.** Instead of Firebase Storage, the SVG and a compressed thumbnail are stored directly as fields on the Firestore project document (see §6). This works because sign/logo SVGs are small text and Firestore's per-document limit (1 MiB) comfortably covers SVG + a modest thumbnail.
+- If a future need genuinely requires server-side compute (e.g. higher-quality Potrace tracing or ML-based inpainting), that would mean revisiting the Blaze decision at that time — it is explicitly out of scope for v1 by design, not by oversight.
 
 ---
 
@@ -154,8 +156,8 @@ projects/{projectId}
   name: string
   createdAt: timestamp
   updatedAt: timestamp
-  svgStoragePath: string     // pointer into Firebase Storage
-  thumbnailStoragePath: string
+  svg: string                // full SVG markup, stored inline — no Firebase Storage used
+  thumbnailDataUrl: string   // small base64 data: URI (JPEG, ~300px, quality-compressed)
   config: {
     cropRect: { x, y, width, height }
     dimensionMm: { width, height }     // height derived but cached
@@ -169,18 +171,19 @@ projects/{projectId}
   }
 ```
 
-### Firebase Storage layout
-```
-/users/{uid}/projects/{projectId}/source.(png|jpg|svg)   // original upload
-/users/{uid}/projects/{projectId}/cleaned.svg              // post-vectorization
-/users/{uid}/projects/{projectId}/thumbnail.png
-```
-STL files are generated client-side on demand and downloaded directly (not stored), to avoid storage bloat — store only the SVG + config, since STL is fully re-derivable from them. Flag this as the default; storing STLs too is a simple addition if the user wants it later.
+### No Firebase Storage — inline document size budget
+Firebase Storage requires the Blaze plan, which this project deliberately avoids (see §3). Instead, the SVG and thumbnail live directly on the Firestore `projects` document as string fields:
+- Firestore's hard per-document limit is **1 MiB (1,048,576 bytes)** total across all fields.
+- The SVG (traced logo/sign art) is plain text and typically well under 100 KB even for detailed multi-color art.
+- The thumbnail must be generated as a small, quality-compressed JPEG data URI (e.g. resized to ~300px on the long edge before encoding) — not a full-resolution PNG — to leave comfortable headroom under the 1 MiB ceiling.
+- **Implementation note:** before saving, check the combined size of `svg` + `thumbnailDataUrl` + `config` and warn the user (rather than silently failing) if it's approaching the limit — this should only realistically happen with unusually complex traced art.
+
+STL files are generated client-side on demand and downloaded directly (never stored) — they're fully re-derivable from the SVG + config, so there's no need to persist them.
 
 ### Firestore Security Rules (summary)
 - `projects/{projectId}`: read/write only where `request.auth.uid == resource.data.ownerUid` (and on create, `request.auth.uid == request.resource.data.ownerUid`).
 - `users/{uid}`: read/write only by that uid.
-- Storage rules mirror this: paths under `/users/{uid}/...` only accessible to that uid.
+- No Storage rules needed — Firebase Storage is not used.
 
 ---
 
@@ -191,15 +194,13 @@ STL files are generated client-side on demand and downloaded directly (not store
 - Re-running on color-count change should be debounced (e.g., 300 ms after the user stops typing) since it's not the "explicit generate" step described in §6.7 — this quantization preview is a separate, faster loop.
 
 ### 9.2 Vectorization
-- Client-side option: `imagetracerjs` — pure JS, runs in-browser, no server round-trip, good enough quality for logos/signage art. Recommended default for v1 to keep infra simple.
-- Server-side alternative: Potrace (via a Cloud Function) traces one color mask at a time — higher quality curves, but requires a server hop per attempt. Consider this if `imagetracerjs` output quality proves insufficient during implementation; keep the interface abstracted so the tracer backend is swappable.
+- `imagetracerjs` — pure JS, runs in-browser, no server round-trip, good enough quality for logos/signage art. This is the only tracer used; there is no server-side fallback in this architecture (no Blaze/Cloud Functions), so tuning the color-count/quantization step (§9.1) is the main lever for output quality if results are noisy.
 
 ### 9.3 Inpainting (Object Removal) — flagged as highest-risk milestone
-Three viable approaches, roughly in increasing quality/complexity order:
-1. **Simple client-side heuristic fill:** for the masked region, sample and blend nearby background pixels (e.g., a fast marching / Telea-style algorithm reimplemented in JS, or run OpenCV.js compiled to WASM in-browser). Keeps everything client-side, no backend needed.
-2. **Server-side OpenCV (Cloud Function):** Node function using `opencv4nodejs` or calling out to a Python microservice running `cv2.inpaint` (Telea or Navier-Stokes algorithm). Good quality for simple backgrounds (flat colors, gradients), which is the common case for sign/logo art.
-3. **ML-based inpainting API** (higher quality on complex photographic backgrounds, but adds a paid third-party dependency) — only pursue if v1 quality from (1)/(2) proves insufficient for real user images.
-- **Recommendation:** implement OpenCV.js in-browser (option 1) first — it avoids backend complexity/cost entirely and sign/logo source images typically have simple, flat, or gradient backgrounds where Telea inpainting performs well.
+Client-side only, since there is no backend:
+- Run OpenCV.js (compiled to WASM) in-browser and use its Telea or Navier-Stokes inpainting implementation on the masked region.
+- This works well for the common case of sign/logo art with simple, flat, or gradient backgrounds. Photographic or highly textured backgrounds will look noticeably worse — that's an accepted tradeoff of staying fully client-side/free-tier; flag it to the user in the UI (e.g. "results work best on simple backgrounds") rather than trying to silently compensate.
+- Load the OpenCV.js WASM build lazily (only when the user reaches this step) since it's a multi-MB payload — don't include it in the main app bundle.
 
 ### 9.4 Mesh / CSG
 - `earcut` for polygon triangulation of each traced color region (after flattening SVG bezier curves to polylines at an adaptive tolerance).
@@ -210,7 +211,8 @@ Three viable approaches, roughly in increasing quality/complexity order:
 
 ## 8. Non-Functional Requirements
 
-- **Performance:** vectorization preview updates should feel responsive (<1s for typical logo-sized images at moderate color counts). Full mesh generation may take several seconds for detailed art — must show progress/loading state and must not block the UI thread (use a Web Worker for triangulation/CSG if it causes jank).
+- **Performance:** vectorization preview updates should feel responsive (<1s for typical logo-sized images at moderate color counts). Full mesh generation may take several seconds for detailed art — must show progress/loading state and must not block the UI thread (use a Web Worker for triangulation/CSG/OpenCV.js if it causes jank). Since there is no backend to fall back on, all heavy compute (inpainting, tracing, mesh building) must run acceptably on typical consumer hardware in-browser — this is a harder constraint than it would be with a server available.
+- **Firestore document size:** the combined `svg` + `thumbnailDataUrl` + `config` fields on a project document must stay under Firestore's 1 MiB per-document limit (see §6) — validate and warn before save rather than letting a write fail unexplained.
 - **Browser support:** latest Chrome/Edge/Firefox/Safari (desktop). No IE11 support needed.
 - **File size limits:** cap uploads at 20 MB; cap output SVG complexity (e.g., warn if traced path count is extremely high, suggest lowering color count).
 - **Accessibility:** standard keyboard navigation and color-contrast on UI chrome (not the generated art itself).
@@ -222,28 +224,28 @@ Three viable approaches, roughly in increasing quality/complexity order:
 
 - **Repo:** GitHub, monorepo suggested layout:
   ```
-  /apps/web        # React frontend (deployed to Cloudflare Pages)
-  /functions        # Firebase Cloud Functions (inpainting, optional server-side tracing)
+  /apps/web        # React frontend (deployed to Cloudflare Pages) — the entire app
   /packages/shared  # shared types (project config schema, etc.)
   ```
-- **CI/CD:** GitHub Actions — on push to `main`: run lint/type-check/tests, build frontend, deploy to Cloudflare Pages; deploy `/functions` to Firebase on changes to that directory.
-- **Environments:** at minimum a `production` Firebase project; a `staging`/`dev` Firebase project is recommended so schema/rules changes can be tested before going live.
-- **Secrets:** Firebase config (API key etc.) is not secret by nature but should still live in environment variables per environment; any server-side keys (if a third-party inpainting API is later used) go in Cloud Functions config/secret manager, never in the frontend bundle.
-- **Custom domain:** point the user's Cloudflare-managed domain at the Cloudflare Pages deployment for the frontend. If Cloud Functions need to sit behind the same domain, use a Cloudflare Worker route (e.g., `/api/*`) proxying to the Firebase Functions URL.
+  There is no `/functions` directory — this architecture has no backend service.
+- **CI/CD:** GitHub Actions — on push to `main`: run lint/type-check/tests, build frontend, deploy to Cloudflare Pages, and deploy Firestore rules/indexes (`firebase deploy --only firestore`) to Firebase. Both of these are free, Spark-plan-compatible operations — no billing account required anywhere in this pipeline.
+- **Environments:** at minimum a `production` Firebase project; a `staging`/`dev` Firebase project is recommended so schema/rules changes can be tested before going live — both stay on Spark.
+- **Secrets:** Firebase config (API key etc.) is not secret by nature but should still live in environment variables per environment.
+- **Custom domain:** point the user's Cloudflare-managed domain at the Cloudflare Pages deployment. No Worker/proxy routing is needed since there's no backend to route to.
 
 ---
 
 ## 10. Suggested Implementation Phases (for the agentic coder)
 
-1. **Scaffold:** repo structure, Firebase project (Auth + Firestore + Storage), Cloudflare Pages hookup, basic React app shell with routing (Editor, My Projects, Login).
+1. **Scaffold:** repo structure, Firebase project (Auth + Firestore only — Spark plan, no billing account), Cloudflare Pages hookup, basic React app shell with routing (Editor, My Projects, Login).
 2. **Auth:** Google sign-in, `users` collection bootstrap on first login.
 3. **Upload + SVG passthrough path:** get an SVG all the way to the 3D viewer with a trivial single-layer extrusion, to validate the mesh pipeline end-to-end early.
 4. **Raster pipeline:** palette detection UI + vectorization (client-side tracer) producing a usable SVG.
-5. **Object removal step:** in-browser inpainting on masked regions.
+5. **Object removal step:** in-browser OpenCV.js inpainting on masked regions (lazy-load the WASM bundle).
 6. **Full 3D config UI:** crop, dimensions, base/layer thickness, per-layer color assignment + merge behavior.
 7. **Mesh generation:** stepped-height mode first, then flat mode with gap-based separation (CSG).
 8. **STL export.**
-9. **Project save/load:** Firestore + Storage wiring, My Projects dashboard.
+9. **Project save/load:** Firestore-only wiring (SVG + thumbnail inline on the document, with the size-budget check from §8), My Projects dashboard.
 10. **Polish:** loading states, error handling, responsive layout, empty states.
 
 ---

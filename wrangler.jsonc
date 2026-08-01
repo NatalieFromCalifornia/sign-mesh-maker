@@ -1,0 +1,8 @@
+{
+  "name": "sign-mesh-maker",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "./apps/web/dist",
+    "not_found_handling": "single-page-application"
+  }
+}

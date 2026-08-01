@@ -29,7 +29,9 @@ export interface Project {
   name: string;
   createdAt: number;
   updatedAt: number;
-  svgStoragePath: string;
-  thumbnailStoragePath: string;
+  /** Full SVG markup, stored inline — no Firebase Storage is used (Spark plan only). */
+  svg: string;
+  /** Small base64 data: URI (JPEG, ~300px, quality-compressed) to stay under Firestore's 1 MiB document limit. */
+  thumbnailDataUrl: string;
   config: ProjectConfig;
 }
