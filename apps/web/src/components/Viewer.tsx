@@ -42,6 +42,13 @@ export function Viewer({ group, className }: ViewerProps) {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+    /*
+     * Stop just above horizontal. A sign is flat, so its underside carries no
+     * information, and orbiting beneath the bed puts the grid between the
+     * camera and the model — which reads as the preview breaking rather than as
+     * a viewpoint the user chose.
+     */
+    controls.maxPolarAngle = Math.PI / 2 - 0.05;
     controlsRef.current = controls;
 
     scene.add(new THREE.AmbientLight(0xffffff, 1.5));
@@ -116,6 +123,11 @@ export function Viewer({ group, className }: ViewerProps) {
     camera.near = Math.max(distance / 500, 0.05);
     camera.far = distance * 12;
     camera.updateProjectionMatrix();
+
+    // Keep zoom inside useful bounds so the user can't end up inside the mesh
+    // or so far out that it becomes a speck.
+    controls.minDistance = sphere.radius * 0.4;
+    controls.maxDistance = distance * 4;
     controls.update();
   }, [group]);
 

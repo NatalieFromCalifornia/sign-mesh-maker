@@ -12,6 +12,8 @@ export interface ParsedSvg {
   /** Extents of the artwork in SVG user units, used to scale to millimetres. */
   width: number;
   height: number;
+  /** Artwork bounds in the flipped (Y-up) space the shapes live in. */
+  bounds: THREE.Box2;
 }
 
 /**
@@ -35,7 +37,7 @@ function flattenAndFlip(shape: THREE.Shape, divisions: number): THREE.Shape {
   return flipped;
 }
 
-function boundsOf(layers: SvgLayer[]): { width: number; height: number } {
+function boundsOf(layers: SvgLayer[]): THREE.Box2 {
   const box = new THREE.Box2();
   for (const layer of layers) {
     for (const shape of layer.shapes) {
@@ -45,8 +47,7 @@ function boundsOf(layers: SvgLayer[]): { width: number; height: number } {
       }
     }
   }
-  const size = box.getSize(new THREE.Vector2());
-  return { width: size.x, height: size.y };
+  return box;
 }
 
 export class SvgParseError extends Error {}
@@ -93,10 +94,28 @@ export function parseSvgLayers(svgText: string, curveDivisions = 24): ParsedSvg 
     );
   }
 
-  const { width, height } = boundsOf(layers);
-  if (width <= 0 || height <= 0) {
+  const bounds = boundsOf(layers);
+  const size = bounds.getSize(new THREE.Vector2());
+  if (size.x <= 0 || size.y <= 0) {
     throw new SvgParseError('The artwork in this SVG has no measurable size.');
   }
 
-  return { layers, width, height };
+  return { layers, width: size.x, height: size.y, bounds };
+}
+
+/**
+ * Serializes a flattened shape to SVG path data, negating Y to return it to
+ * SVG's Y-down convention for on-screen display.
+ *
+ * The shapes are already polylines, so one division per curve is exact.
+ */
+export function shapeToPathData(shape: THREE.Shape): string {
+  const { shape: outline, holes } = shape.extractPoints(1);
+
+  const ring = (points: THREE.Vector2[]) =>
+    points
+      .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(3)} ${(-p.y).toFixed(3)}`)
+      .join(' ') + ' Z';
+
+  return [ring(outline), ...holes.map(ring)].join(' ');
 }

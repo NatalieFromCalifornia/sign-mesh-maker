@@ -5,6 +5,8 @@ import { Field } from '../components/ui/Field';
 import { Panel } from '../components/ui/Panel';
 import { Dropzone, MAX_UPLOAD_BYTES } from '../components/Dropzone';
 import { Viewer } from '../components/Viewer';
+import { ArtworkPreview } from '../components/ArtworkPreview';
+import { cn } from '../lib/cn';
 import { parseSvgLayers, SvgParseError, type ParsedSvg } from '../lib/svgLayers';
 import {
   buildMesh,
@@ -36,6 +38,9 @@ export function Editor() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [stale, setStale] = useState(false);
+  const [view, setView] = useState<'artwork' | 'mesh'>('artwork');
+  /** Layer row under the cursor, isolated in the flat preview. */
+  const [hovered, setHovered] = useState<number | null>(null);
 
   // The built group is a three.js resource, not React state to be GC'd — it
   // has to be disposed explicitly when replaced or unmounted.
@@ -69,6 +74,9 @@ export function Editor() {
     setStats(null);
     setError(null);
     setStale(false);
+    // Without this the pane would stay on a mesh tab that no longer has a mesh.
+    setView('artwork');
+    setHovered(null);
   }, []);
 
   const onFile = useCallback(
@@ -99,6 +107,8 @@ export function Editor() {
         setFileName(file.name);
         setStats(null);
         setStale(false);
+        setView('artwork');
+        setHovered(null);
       } catch (cause) {
         setError(
           cause instanceof SvgParseError ? cause.message : 'That SVG could not be read.',
@@ -131,6 +141,7 @@ export function Editor() {
         });
         setStats({ triangles: built.triangles, depth: built.sizeMm.depth });
         setStale(false);
+        setView('mesh');
       } catch (cause) {
         setError('The mesh could not be built from this artwork.');
         console.error('Mesh build failed', cause);
@@ -220,7 +231,13 @@ export function Editor() {
                 {layers.map((layer, i) => (
                   <li
                     key={`${layer.color}-${i}`}
-                    className="flex items-center justify-between gap-3 border-b border-rule py-2.5 last:border-b-0"
+                    onMouseEnter={() => setHovered(i)}
+                    onMouseLeave={() => setHovered(null)}
+                    className={cn(
+                      'flex items-center justify-between gap-3 border-b border-rule py-2.5 last:border-b-0',
+                      'transition-colors',
+                      hovered === i && 'bg-bench-2',
+                    )}
                   >
                     <span className="flex items-center gap-3">
                       <span
@@ -259,21 +276,53 @@ export function Editor() {
           </div>
 
           <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1 rounded-[3px] border border-rule bg-bench p-1">
+                {(['artwork', 'mesh'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    disabled={mode === 'mesh' && !group}
+                    onClick={() => setView(mode)}
+                    className={cn(
+                      'rounded-[2px] px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors',
+                      'disabled:cursor-not-allowed disabled:opacity-40',
+                      view === mode ? 'bg-bench-2 text-chalk' : 'text-graphite hover:text-chalk',
+                    )}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+              {view === 'mesh' && group && (
+                <p className="font-mono text-[11px] text-graphite">
+                  Drag to rotate · scroll to zoom · right-drag to pan
+                </p>
+              )}
+            </div>
+
             <div className="relative h-[420px] overflow-hidden rounded-panel border border-rule lg:h-[560px]">
-              <Viewer group={group} className="size-full" />
-              {!group && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
-                    Generate a mesh to preview it
-                  </p>
+              {/* The viewer stays mounted while the flat preview is showing, so
+                  the camera keeps its position instead of resetting on toggle. */}
+              <Viewer group={group} className={view === 'mesh' ? 'size-full' : 'hidden'} />
+
+              {view === 'artwork' && (
+                <div className="absolute inset-0 p-8">
+                  <ArtworkPreview parsed={parsed} highlightIndex={hovered} />
                 </div>
               )}
             </div>
-            {stats && (
+
+            {view === 'mesh' && stats ? (
               <p className="font-mono text-[11px] tabular-nums text-graphite">
                 {config.widthMm.toFixed(0)} × {heightMm?.toFixed(1)} × {stats.depth.toFixed(2)} mm
                 {' · '}
                 {stats.triangles.toLocaleString()} triangles
+              </p>
+            ) : (
+              <p className="font-mono text-[11px] text-graphite">
+                {parsed.layers.length} color layers, drawn from the parsed geometry — this is
+                exactly what gets extruded.
               </p>
             )}
           </div>
