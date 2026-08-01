@@ -2,6 +2,10 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
+# Exception: the Firebase web config, which is public by design and must reach
+# the Cloudflare build. Narrow on purpose — a stray .env anywhere else stays
+# ignored. See the header in that file.
+!apps/web/.env
 .env.local
 .firebase/
 firebase-debug.log
