@@ -27,7 +27,7 @@ function GoogleMark() {
 }
 
 export function Login() {
-  const { user, loading, error, signIn } = useAuth();
+  const { user, loading, error, configured, signIn } = useAuth();
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from ?? '/projects';
 
@@ -64,20 +64,33 @@ export function Login() {
             variant="primary"
             className="w-full sm:w-auto"
             onClick={() => void signIn()}
-            disabled={loading}
+            disabled={loading || !configured}
           >
             <GoogleMark />
             Continue with Google
           </Button>
 
-          <p className="mt-4 max-w-sm text-sm leading-relaxed text-graphite">
-            Signing in saves your projects. The editor and STL export work without an
-            account — start in the{' '}
-            <Link to="/" className="text-chalk underline underline-offset-4 hover:text-signal">
-              editor
-            </Link>{' '}
-            any time.
-          </p>
+          {configured ? (
+            <p className="mt-4 max-w-sm text-sm leading-relaxed text-graphite">
+              Signing in saves your projects. The editor and STL export work without an
+              account — start in the{' '}
+              <Link to="/" className="text-chalk underline underline-offset-4 hover:text-signal">
+                editor
+              </Link>{' '}
+              any time.
+            </p>
+          ) : (
+            /* States what's wrong and what still works, rather than leaving a
+               dead button with no explanation. */
+            <p className="mt-4 max-w-sm border-l-2 border-rule-strong pl-3 text-sm leading-relaxed text-graphite">
+              Sign-in is unavailable on this deployment — it was built without its
+              Firebase configuration. The{' '}
+              <Link to="/" className="text-chalk underline underline-offset-4 hover:text-signal">
+                editor
+              </Link>{' '}
+              and STL export still work; projects just can’t be saved.
+            </p>
+          )}
 
           {error && (
             <p role="alert" className="mt-4 border-l-2 border-danger pl-3 text-sm text-danger">

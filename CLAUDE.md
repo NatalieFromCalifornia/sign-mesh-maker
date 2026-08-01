@@ -75,5 +75,7 @@ Two things that are easy to get backwards: the palette/vectorization preview *is
 
 ## Environment
 - Real Firebase config values live in `apps/web/.env.local` (gitignored, already populated — don't ask the user to re-paste them). All seven `VITE_FIREBASE_*` keys are present; read them via `import.meta.env`.
+- **`.env.local` is gitignored, so it never reaches the Cloudflare build.** The five keys the app actually reads (`API_KEY`, `AUTH_DOMAIN`, `PROJECT_ID`, `MESSAGING_SENDER_ID`, `APP_ID`) must also be set as build environment variables in the Cloudflare project, or the deployed build has no Firebase config. These are not secrets — Firebase web config ships in every client bundle by design, and access is enforced by `firestore.rules` plus the authorized-domains list. Missing config now degrades gracefully (auth disabled, editor still works) rather than blanking the page; don't reintroduce a module-scope throw.
+- Verify a deploy by loading the page in a browser and checking `#root` actually mounted. Grepping the bundle for strings is not sufficient — a bundle can contain every expected string and still throw before React renders.
 - Node is managed via `nvm`, not system/apt Node.
 - Live site: `signmaker.nataliepyre.com` (custom domain on the Cloudflare project). Adding any new deployment origin also requires adding it to Firebase Auth's authorized-domains list, or Google Sign-In fails there.

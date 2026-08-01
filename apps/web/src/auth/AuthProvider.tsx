@@ -11,10 +11,11 @@ import {
   onAuthStateChanged,
   signInWithPopup,
   signOut,
+  type Auth,
   type User,
 } from 'firebase/auth';
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
-import { auth, db, googleProvider } from '../lib/firebase';
+import { doc, getDoc, serverTimestamp, setDoc, type Firestore } from 'firebase/firestore';
+import { auth, db, googleProvider, isFirebaseConfigured } from '../lib/firebase';
 
 interface AuthContextValue {
   user: User | null;
@@ -22,6 +23,8 @@ interface AuthContextValue {
   loading: boolean;
   /** Set when the last sign-in/sign-out attempt failed; cleared on retry. */
   error: string | null;
+  /** False when this deployment has no Firebase config — sign-in is unavailable. */
+  configured: boolean;
   signIn: () => Promise<void>;
   signOutUser: () => Promise<void>;
 }
@@ -37,8 +40,12 @@ const AuthContext = createContext<AuthContextValue | null>(null);
  * `refreshProfile` is set only after an explicit sign-in, where the Google
  * profile may legitimately have changed since last time.
  */
-async function ensureUserDoc(user: User, refreshProfile: boolean): Promise<void> {
-  const ref = doc(db, 'users', user.uid);
+async function ensureUserDoc(
+  store: Firestore,
+  user: User,
+  refreshProfile: boolean,
+): Promise<void> {
+  const ref = doc(store, 'users', user.uid);
   const profile = {
     displayName: user.displayName ?? '',
     email: user.email ?? '',
@@ -55,10 +62,14 @@ async function ensureUserDoc(user: User, refreshProfile: boolean): Promise<void>
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  // With no Firebase there is no session to wait for, so don't hold the UI.
+  const [loading, setLoading] = useState(isFirebaseConfigured);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!auth || !db) return;
+    const store = db;
+
     return onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
       setLoading(false);
@@ -66,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (nextUser) {
         // Never block rendering on the bootstrap write; a failure here means
         // the profile doc lags, not that the session is invalid.
-        void ensureUserDoc(nextUser, false).catch((cause) => {
+        void ensureUserDoc(store, nextUser, false).catch((cause) => {
           console.error('Failed to bootstrap users/{uid} document', cause);
         });
       }
@@ -74,10 +85,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(async () => {
+    if (!auth || !db || !googleProvider) {
+      setError('Sign-in is unavailable: this deployment has no Firebase configuration.');
+      return;
+    }
+    const service: Auth = auth;
+    const store: Firestore = db;
+
     setError(null);
     try {
-      const credential = await signInWithPopup(auth, googleProvider);
-      await ensureUserDoc(credential.user, true);
+      const credential = await signInWithPopup(service, googleProvider);
+      await ensureUserDoc(store, credential.user, true);
     } catch (cause) {
       const code = (cause as { code?: string }).code;
       // Closing the popup is a normal user action, not an error worth showing.
@@ -94,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOutUser = useCallback(async () => {
+    if (!auth) return;
     setError(null);
     try {
       await signOut(auth);
@@ -104,7 +123,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, error, signIn, signOutUser }),
+    () => ({
+      user,
+      loading,
+      error,
+      configured: isFirebaseConfigured,
+      signIn,
+      signOutUser,
+    }),
     [user, loading, error, signIn, signOutUser],
   );
 
