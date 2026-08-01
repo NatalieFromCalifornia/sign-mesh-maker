@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 
 interface PanelProps {
+  /** Rendered as a drafting-style tracked mono label, not a prose heading. */
   title?: string;
   description?: string;
   actions?: ReactNode;
@@ -11,17 +12,20 @@ interface PanelProps {
 
 export function Panel({ title, description, actions, className, children }: PanelProps) {
   return (
-    <section
-      className={cn(
-        'rounded-panel border border-border bg-surface',
-        className,
-      )}
-    >
+    <section className={cn('rounded-panel border border-rule bg-bench', className)}>
       {(title || actions) && (
-        <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+        <header className="flex items-start justify-between gap-4 border-b border-rule px-5 py-4">
           <div>
-            {title && <h2 className="text-sm font-medium text-fg">{title}</h2>}
-            {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+            {title && (
+              <h2 className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
+                {title}
+              </h2>
+            )}
+            {description && (
+              <p className="mt-2 max-w-prose text-sm leading-relaxed text-graphite">
+                {description}
+              </p>
+            )}
           </div>
           {actions}
         </header>

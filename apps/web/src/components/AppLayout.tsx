@@ -5,8 +5,23 @@ import { cn } from '../lib/cn';
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {
   return cn(
-    'rounded-lg px-3 py-1.5 text-sm transition-colors',
-    isActive ? 'bg-surface-2 text-fg' : 'text-muted hover:text-fg',
+    'relative py-1 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors',
+    // Active state is a survey tick under the label, not a filled pill.
+    'after:absolute after:-bottom-px after:left-0 after:h-px after:w-full after:transition-colors',
+    isActive
+      ? 'text-chalk after:bg-signal'
+      : 'text-graphite after:bg-transparent hover:text-chalk',
+  );
+}
+
+/** Three ascending bars — the elevation stack reduced to a mark. */
+function Wordmark() {
+  return (
+    <span className="flex items-end gap-[2px]" aria-hidden="true">
+      <span className="h-1.5 w-1 bg-filament-3" />
+      <span className="h-2.5 w-1 bg-filament-2" />
+      <span className="h-3.5 w-1 bg-filament-1" />
+    </span>
   );
 }
 
@@ -14,7 +29,7 @@ function UserMenu() {
   const { user, loading, signOutUser } = useAuth();
 
   if (loading) {
-    return <div className="h-8 w-24 animate-pulse rounded-lg bg-surface-2" />;
+    return <div className="h-8 w-28 animate-pulse rounded-[3px] bg-bench-2" />;
   }
 
   if (!user) {
@@ -34,15 +49,15 @@ function UserMenu() {
           <img
             src={user.photoURL}
             alt=""
-            className="size-7 rounded-full border border-border"
+            className="size-6 rounded-full border border-rule"
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="flex size-7 items-center justify-center rounded-full border border-border bg-surface-2 text-xs text-muted">
+          <div className="flex size-6 items-center justify-center rounded-full border border-rule bg-bench-2 font-mono text-[10px] text-graphite">
             {(user.displayName ?? user.email ?? '?').charAt(0).toUpperCase()}
           </div>
         )}
-        <span className="hidden text-sm text-muted sm:inline">
+        <span className="hidden font-mono text-[11px] text-graphite sm:inline">
           {user.displayName ?? user.email}
         </span>
       </div>
@@ -56,19 +71,21 @@ function UserMenu() {
 export function AppLayout() {
   return (
     <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 border-b border-border bg-canvas/80 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4">
-          <div className="flex items-center gap-6">
-            <NavLink to="/" className="flex items-center gap-2">
-              <span className="size-3 rounded-sm bg-accent" aria-hidden="true" />
-              <span className="text-sm font-medium tracking-tight">Sign Mesh Maker</span>
+      <header className="sticky top-0 z-10 border-b border-rule bg-mat/90 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-6 px-5">
+          <div className="flex items-center gap-8">
+            <NavLink to="/" className="flex items-center gap-2.5">
+              <Wordmark />
+              <span className="font-mono text-xs uppercase tracking-[0.18em] text-chalk">
+                Sign Mesh Maker
+              </span>
             </NavLink>
-            <nav className="flex items-center gap-1">
+            <nav className="flex items-center gap-5">
               <NavLink to="/" end className={navLinkClass}>
                 Editor
               </NavLink>
               <NavLink to="/projects" className={navLinkClass}>
-                My Projects
+                Projects
               </NavLink>
             </nav>
           </div>
@@ -76,7 +93,7 @@ export function AppLayout() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-5 py-10">
         <Outlet />
       </main>
     </div>

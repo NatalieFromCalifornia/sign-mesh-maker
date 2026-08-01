@@ -3,7 +3,7 @@ import { useAuth } from '../auth/AuthProvider';
 
 /**
  * Guards routes that are meaningless without an account (currently only
- * "My Projects"). The editor itself stays public on purpose — requirements §4
+ * Projects). The editor itself stays public on purpose — requirements §4
  * allows anonymous use of the whole pipeline and only gates saving.
  */
 export function RequireAuth() {
@@ -12,8 +12,8 @@ export function RequireAuth() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-24 text-sm text-muted">
-        Checking your session…
+      <div className="py-24 text-center font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
+        Checking session
       </div>
     );
   }

@@ -1,7 +1,7 @@
-import { Navigate, useLocation } from 'react-router-dom';
+import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthProvider';
 import { Button } from '../components/ui/Button';
-import { Panel } from '../components/ui/Panel';
+import { ElevationStack } from '../components/ElevationStack';
 
 function GoogleMark() {
   return (
@@ -36,19 +36,30 @@ export function Login() {
   }
 
   return (
-    <div className="mx-auto max-w-md py-12">
-      <Panel className="p-8">
-        <div className="flex flex-col items-center text-center">
-          <span className="size-10 rounded-lg bg-accent" aria-hidden="true" />
-          <h1 className="mt-5 text-lg font-medium">Sign in to Sign Mesh Maker</h1>
-          <p className="mt-2 text-sm text-muted">
-            An account is only needed to save projects. You can use the editor and export
-            an STL without signing in.
-          </p>
+    <div className="mx-auto grid max-w-4xl items-center gap-12 py-8 md:grid-cols-[1.1fr_1fr] md:gap-16 md:py-16">
+      {/* Hero: the elevation drawing states the product's thesis before any copy does. */}
+      <div>
+        <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
+          Elevation — typical
+        </p>
+        <ElevationStack className="mt-4" />
+      </div>
 
+      <div>
+        <h1 className="font-mono text-2xl uppercase leading-[1.15] tracking-[0.02em] text-chalk">
+          Flat art in,
+          <br />
+          <span className="text-signal">stacked color</span> out.
+        </h1>
+        <p className="mt-5 max-w-sm text-sm leading-relaxed text-graphite">
+          Trace an image to vector, assign each color a print height, and export an
+          STL for a multi-material printer. Everything runs in this browser.
+        </p>
+
+        <div className="mt-8 border-t border-rule pt-6">
           <Button
-            variant="secondary"
-            className="mt-6 w-full"
+            variant="primary"
+            className="w-full sm:w-auto"
             onClick={() => void signIn()}
             disabled={loading}
           >
@@ -56,13 +67,22 @@ export function Login() {
             Continue with Google
           </Button>
 
+          <p className="mt-4 max-w-sm text-sm leading-relaxed text-graphite">
+            Signing in saves your projects. The editor and STL export work without an
+            account — start in the{' '}
+            <Link to="/" className="text-chalk underline underline-offset-4 hover:text-signal">
+              editor
+            </Link>{' '}
+            any time.
+          </p>
+
           {error && (
-            <p role="alert" className="mt-4 text-sm text-danger">
+            <p role="alert" className="mt-4 border-l-2 border-danger pl-3 text-sm text-danger">
               {error}
             </p>
           )}
         </div>
-      </Panel>
+      </div>
     </div>
   );
 }

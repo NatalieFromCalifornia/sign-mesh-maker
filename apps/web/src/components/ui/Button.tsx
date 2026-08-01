@@ -11,17 +11,15 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const VARIANTS: Record<Variant, string> = {
-  primary:
-    'bg-accent text-accent-fg hover:bg-accent-strong active:bg-accent font-medium',
-  secondary:
-    'bg-surface-2 text-fg border border-border hover:border-border-strong hover:bg-border/40',
-  ghost: 'text-muted hover:text-fg hover:bg-surface-2',
-  danger: 'bg-transparent text-danger border border-danger/40 hover:bg-danger/10',
+  primary: 'bg-signal text-mat hover:bg-signal-soft',
+  secondary: 'bg-bench-2 text-chalk border border-rule hover:border-rule-strong',
+  ghost: 'text-graphite hover:text-chalk hover:bg-bench-2',
+  danger: 'text-danger border border-danger/40 hover:bg-danger/10',
 };
 
 const SIZES: Record<Size, string> = {
-  sm: 'h-8 px-3 text-sm',
-  md: 'h-10 px-4 text-sm',
+  sm: 'h-8 px-3 text-xs',
+  md: 'h-10 px-4 text-xs',
 };
 
 export function Button({
@@ -34,8 +32,9 @@ export function Button({
   return (
     <button
       className={cn(
-        'inline-flex items-center justify-center gap-2 rounded-lg transition-colors',
-        'disabled:cursor-not-allowed disabled:opacity-50',
+        // Controls speak in the drafting register: mono, uppercase, tracked.
+        'inline-flex items-center justify-center gap-2 rounded-[3px] font-mono uppercase tracking-[0.1em]',
+        'transition-colors disabled:cursor-not-allowed disabled:opacity-40',
         VARIANTS[variant],
         SIZES[size],
         className,

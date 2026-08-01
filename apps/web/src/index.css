@@ -3,31 +3,44 @@
 /*
  * Design tokens. Tailwind v4 is configured here in CSS rather than in a
  * tailwind.config.js — every custom property under @theme becomes a utility
- * (e.g. --color-surface → bg-surface / text-surface / border-surface).
+ * (e.g. --color-bench → bg-bench / text-bench / border-bench).
  *
- * These are plain CSS variables, so three.js can read the same values at
- * runtime (getComputedStyle) instead of duplicating the palette in JS.
+ * These stay plain CSS variables so three.js can read them at runtime via
+ * getComputedStyle instead of the palette being duplicated in JS.
  *
- * The shell is deliberately dark and low-chroma: the generated sign meshes are
- * the only saturated thing on screen and need to read accurately against it.
+ * Direction: a self-healing cutting mat — the surface this work actually
+ * happens on. Dark and low-chroma, because the generated sign meshes are the
+ * only saturated thing on screen and must read as true print colors. The
+ * chrome spends its entire chroma budget on one survey orange for actions;
+ * the filament ramp below is reserved for the elevation device.
  */
 @theme {
+  /* Monospace is the display face, not just the code face — dimensions on an
+     engineering drawing are set in mono, and that's the vernacular here. */
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
 
-  --color-canvas: #0c0d10;
-  --color-surface: #15171c;
-  --color-surface-2: #1d2027;
-  --color-border: #2a2e38;
-  --color-border-strong: #3a404d;
-  --color-fg: #e9ebef;
-  --color-muted: #99a0ac;
-  --color-accent: #f0a530;
-  --color-accent-strong: #ffb84d;
-  --color-accent-fg: #1a1205;
-  --color-danger: #f0524d;
+  --color-mat: #0f1a1c;
+  --color-bench: #162427;
+  --color-bench-2: #1d3034;
+  --color-rule: #24393d;
+  --color-rule-strong: #375357;
+  --color-chalk: #e7edec;
+  --color-graphite: #8c9c9e;
+  --color-signal: #f2681c;
+  --color-signal-soft: #ff8340;
+  --color-danger: #ef5a5a;
 
-  --radius-panel: 0.875rem;
+  /* Stand-in filament colors. The only chroma in the UI, and only inside the
+     elevation device — never as decoration on chrome. */
+  --color-filament-1: #e7edec;
+  --color-filament-2: #f2681c;
+  --color-filament-3: #2f9d8f;
+  --color-filament-4: #4d7fbe;
+
+  --radius-panel: 0.375rem;
 }
 
 @layer base {
@@ -38,16 +51,56 @@
   }
 
   body {
-    background-color: var(--color-canvas);
-    color: var(--color-fg);
+    background-color: var(--color-mat);
+    /* Cutting-mat grid. Deliberately near the threshold of perception — it
+       should register as texture, never as a table. */
+    background-image:
+      linear-gradient(
+        to right,
+        color-mix(in oklab, var(--color-rule) 45%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        to bottom,
+        color-mix(in oklab, var(--color-rule) 45%, transparent) 1px,
+        transparent 1px
+      );
+    background-size: 28px 28px;
+    color: var(--color-chalk);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
-  /* Consistent focus treatment; components don't each re-specify this. */
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--color-signal);
     outline-offset: 2px;
+  }
+}
+
+/*
+ * The one orchestrated moment: strata rise from the datum line on load, the
+ * way layers are laid down. Used only by the elevation device.
+ */
+@keyframes stratum-rise {
+  from {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+@utility stratum {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: stratum-rise 620ms cubic-bezier(0.16, 0.84, 0.44, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stratum {
+    animation: none;
   }
 }
