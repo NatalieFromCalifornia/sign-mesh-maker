@@ -11,6 +11,13 @@ Web app that converts a 2D image/SVG into a multi-color 3D-printable STL sign.
 - **Setup status:** `docs/manual-setup.md` — all manual (browser/console) setup steps are complete as of the checklist in that file. Don't re-suggest doing them; if something in the app doesn't work, check whether it's actually one of the boxes there before assuming setup is incomplete.
 - **Current state:** scaffold only. `apps/web/src/App.tsx` is a placeholder with no routing, no auth, and no pipeline code. Dependencies are not installed yet — run `npm install` at the repo root first.
 
+## UI work
+Before building or reshaping any user-facing screen, invoke the `frontend-design:frontend-design` skill and follow it. This applies to new routes, new components, and visual reworks of existing ones — not to logic-only changes that leave the rendered output alone.
+
+Two standing constraints it should work within, rather than override:
+- Tailwind v4 with tokens in the `@theme` block of `apps/web/src/index.css`. New colors/spacing/radii go there as CSS variables so three.js can read the same values at runtime; don't hardcode hex in `className`.
+- The app chrome stays deliberately restrained and low-chroma. The generated sign meshes are the only saturated thing on screen and must read accurately — a colorful UI would actively mislead about print colors. Spend the aesthetic risk on type, layout, and the marketing/empty-state surfaces, not on the editor chrome surrounding the 3D viewport.
+
 ## Commands
 
 Run from the repo root (npm workspaces; each script delegates to `apps/web`):
