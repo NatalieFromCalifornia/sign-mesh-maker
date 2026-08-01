@@ -18,6 +18,25 @@ Claude Code has built enough to deploy.
 
 ---
 
+## Status
+
+- [x] 1. Accounts created
+- [x] 2. GitHub repository created
+- [x] 3. Firebase project created (Spark plan)
+- [x] 4. Google Sign-In enabled
+- [x] 5. Firestore database created
+- [x] 6. Firebase CLI installed & authenticated
+- [x] 7. Cloudflare project created
+- [x] 8. Custom domain attached (`signmaker.nataliepyre.com`)
+- [x] 9. GitHub Secrets added (`FIREBASE_TOKEN`, `FIREBASE_PROJECT_ID`)
+
+All steps below are complete — this file is kept as reference for what was
+done and how, not as an open task list. If something in the app misbehaves,
+check whether it's actually one of these steps (e.g. an authorized domain
+that didn't get added) before assuming it's a code bug.
+
+---
+
 ## 1. Create accounts (if you don't already have them)
 - A Google account (used for both Firebase and Google Sign-In).
 - A GitHub account.
