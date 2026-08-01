@@ -36,7 +36,14 @@ export function ArtworkPreview({
 
     return {
       viewBox: box,
-      paths: parsed.layers.map((layer) => layer.shapes.map(shapeToPathData).join(' ')),
+      /*
+       * One <path> per shape, never one per layer. Concatenating shapes into a
+       * single path makes fill-rule apply across all of them, so any two
+       * overlapping regions of the same color cancel into a hole — which
+       * rendered artwork with many overlapping same-color circles as a
+       * checkerboard of gaps.
+       */
+      paths: parsed.layers.map((layer) => layer.shapes.map(shapeToPathData)),
     };
   }, [parsed]);
 
@@ -47,15 +54,17 @@ export function ArtworkPreview({
       role="img"
       aria-label={`Artwork preview, ${parsed.layers.length} color layers`}
     >
-      {paths.map((d, i) => (
-        <path
+      {paths.map((shapePaths, i) => (
+        <g
           key={i}
-          d={d}
           fill={colors?.[i] ?? parsed.layers[i].color}
-          fillRule="evenodd"
           opacity={highlightIndex === null || highlightIndex === i ? 1 : 0.15}
           style={{ transition: 'opacity 120ms' }}
-        />
+        >
+          {shapePaths.map((d, j) => (
+            <path key={j} d={d} fillRule="evenodd" />
+          ))}
+        </g>
       ))}
     </svg>
   );

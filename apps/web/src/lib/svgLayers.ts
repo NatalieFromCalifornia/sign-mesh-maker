@@ -52,6 +52,58 @@ function boundsOf(layers: SvgLayer[]): THREE.Box2 {
 
 export class SvgParseError extends Error {}
 
+function toHex(r: number, g: number, b: number): string {
+  const channel = (v: number) =>
+    Math.max(0, Math.min(255, Math.round(v)))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
+}
+
+/**
+ * Resolves a `fill` attribute to `#rrggbb`.
+ *
+ * three's Color.setStyle matches percentage rgb with `(\d+)%`, which accepts
+ * only whole numbers. Real-world SVGs — anything exported through Cairo, which
+ * covers most Inkscape and PDF-derived output — write
+ * `rgb(75.72937%, 87.400818%, 96.116638%)`. Those silently fail to parse and
+ * fall back to white, collapsing every layer into one.
+ *
+ * So percentage and numeric forms are handled here, and only hex and named
+ * colors are delegated to three.
+ */
+export function resolveFill(raw: string | undefined, fallback: THREE.Color): string {
+  const value = raw?.trim().toLowerCase();
+  if (!value || value === 'none' || value === 'transparent') {
+    return `#${fallback.getHexString()}`;
+  }
+
+  const percent = value.match(
+    /^rgba?\(\s*([\d.]+)%[\s,]+([\d.]+)%[\s,]+([\d.]+)%/,
+  );
+  if (percent) {
+    return toHex(
+      (Number(percent[1]) / 100) * 255,
+      (Number(percent[2]) / 100) * 255,
+      (Number(percent[3]) / 100) * 255,
+    );
+  }
+
+  const numeric = value.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/);
+  if (numeric) {
+    return toHex(Number(numeric[1]), Number(numeric[2]), Number(numeric[3]));
+  }
+
+  // Hex and named colors: three parses these correctly.
+  const parsed = new THREE.Color();
+  try {
+    parsed.setStyle(value);
+    return `#${parsed.getHexString()}`;
+  } catch {
+    return `#${fallback.getHexString()}`;
+  }
+}
+
 /**
  * Groups an SVG's filled regions by fill color, one layer per distinct color.
  *
@@ -72,13 +124,18 @@ export function parseSvgLayers(svgText: string, curveDivisions = 24): ParsedSvg 
   const byColor = new Map<string, THREE.Shape[]>();
 
   for (const path of paths) {
-    // Stroke-only geometry has nothing to extrude.
-    if (path.userData?.style?.fill === 'none') continue;
+    const style = path.userData?.style;
+
+    // Stroke-only or fully transparent geometry has nothing to extrude.
+    if (style?.fill === 'none') continue;
+    if (style?.fillOpacity !== undefined && Number(style.fillOpacity) === 0) continue;
 
     const shapes = SVGLoader.createShapes(path);
     if (shapes.length === 0) continue;
 
-    const color = `#${path.color.getHexString()}`;
+    // Read the raw attribute rather than trusting path.color, which is the
+    // result of the parse that fails on decimal percentages.
+    const color = resolveFill(style?.fill, path.color);
     const existing = byColor.get(color);
     const flattened = shapes.map((shape) => flattenAndFlip(shape, curveDivisions));
 
