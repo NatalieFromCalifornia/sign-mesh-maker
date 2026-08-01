@@ -84,7 +84,7 @@ export function AppLayout() {
               {/* Below sm the mark carries the identity alone — the full
                   wordmark wrapped to three lines and blew out the header. */}
               <span className="hidden whitespace-nowrap font-mono text-xs uppercase tracking-[0.18em] text-chalk sm:inline">
-                Sign Mesh Maker
+                Sign Maker
               </span>
             </NavLink>
             <nav className="flex items-center gap-5">

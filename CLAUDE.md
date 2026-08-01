@@ -2,14 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# Sign Mesh Maker
+# Sign Maker
 
 Web app that converts a 2D image/SVG into a multi-color 3D-printable STL sign.
 
 ## Start here
 - **Build spec:** `docs/requirements.md` — full product/design spec, data model, algorithms, and the suggested implementation phases (§10). Follow that phase order unless told otherwise.
 - **Setup status:** `docs/manual-setup.md` — all manual (browser/console) setup steps are complete as of the checklist in that file. Don't re-suggest doing them; if something in the app doesn't work, check whether it's actually one of the boxes there before assuming setup is incomplete.
-- **Current state:** scaffold only. `apps/web/src/App.tsx` is a placeholder with no routing, no auth, and no pipeline code. Dependencies are not installed yet — run `npm install` at the repo root first.
+- **Current state:** phases 1–3 of §10 are done, plus STL export (§8). Routing, Google auth, SVG upload, per-color extrusion, the three.js preview, and binary STL download all work end to end. Still to build: raster input (palette detection + tracing, §10 phases 4–5), inpainting, crop, per-layer color reassignment and merging, flat mode with CSG gaps, and project save/load.
 
 ## UI work
 Before building or reshaping any user-facing screen, invoke the `frontend-design:frontend-design` skill and follow it. This applies to new routes, new components, and visual reworks of existing ones — not to logic-only changes that leave the rendered output alone.

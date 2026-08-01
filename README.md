@@ -1,4 +1,4 @@
-# Sign Mesh Maker
+# Sign Maker
 
 Turn a 2D image or SVG into a multi-color, 3D-printable STL sign.
 

@@ -1,4 +1,4 @@
-# Sign Mesh Maker — Design & Requirements Document
+# Sign Maker — Design & Requirements Document
 
 **Purpose of this document:** This is a build spec intended to be handed directly to an agentic coding assistant (Claude Code) to implement and deploy the application. It describes the product, user flows, architecture, data model, algorithms, and a phased implementation plan.
 
@@ -6,7 +6,7 @@
 
 ## 1. Product Overview
 
-**Sign Mesh Maker** is a web application that turns a 2D image or vector graphic into a multi-color (or single-color relief) 3D-printable STL mesh, suitable for producing physical signs on multi-material or color-changing FDM printers.
+**Sign Maker** is a web application that turns a 2D image or vector graphic into a multi-color (or single-color relief) 3D-printable STL mesh, suitable for producing physical signs on multi-material or color-changing FDM printers.
 
 Core pipeline:
 
