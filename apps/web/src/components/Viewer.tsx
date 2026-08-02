@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { cn } from '../lib/cn';
 
 /** Reads a design token so the 3D view matches the surrounding chrome. */
 function token(name: string, fallback: string): string {
@@ -37,7 +38,26 @@ export function Viewer({ group, className }: ViewerProps) {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    mount.appendChild(renderer.domElement);
+
+    /*
+     * Take the canvas out of layout entirely.
+     *
+     * setSize(w, h, false) leaves the CSS size unset, so the canvas lays out at
+     * its buffer size — which is w × devicePixelRatio. On any HiDPI display
+     * that made the canvas wider than its container, growing it, which
+     * retriggered the ResizeObserver and doubled it again. The buffer ran away
+     * to millions of pixels, WebGL failed to allocate, and the viewer went
+     * blank. Absolute positioning at 100% means the element can never influence
+     * the size it's measured against.
+     */
+    const canvas = renderer.domElement;
+    canvas.style.position = 'absolute';
+    canvas.style.top = '0';
+    canvas.style.left = '0';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.display = 'block';
+    mount.appendChild(canvas);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -131,5 +151,6 @@ export function Viewer({ group, className }: ViewerProps) {
     controls.update();
   }, [group]);
 
-  return <div ref={mountRef} className={className} />;
+  // relative so the absolutely-positioned canvas anchors to this box.
+  return <div ref={mountRef} className={cn('relative', className)} />;
 }

@@ -76,6 +76,23 @@
     outline: 2px solid var(--color-signal);
     outline-offset: 2px;
   }
+
+  /*
+   * Drop the native number spinners. They're drawn by the OS, ignore the type
+   * scale entirely, and collide with the "mm" unit affix that already occupies
+   * the trailing edge of every dimension field. Arrow keys still step the value.
+   */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+  }
+
+  input[type='number'] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
 }
 
 /*
