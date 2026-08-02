@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { cn } from '../lib/cn';
@@ -15,7 +15,15 @@ interface ViewerProps {
   className?: string;
 }
 
-export function Viewer({ group, className }: ViewerProps) {
+export interface ViewerHandle {
+  /** Re-frames the camera on the mesh — the way back from panning into empty space. */
+  resetView: () => void;
+}
+
+export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(
+  { group, className },
+  ref,
+) {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const contentRef = useRef<THREE.Group | null>(null);
@@ -113,24 +121,15 @@ export function Viewer({ group, className }: ViewerProps) {
     };
   }, []);
 
-  // Swap in the current mesh and frame the camera to fit it.
-  useEffect(() => {
-    const scene = sceneRef.current;
+  /** Frames whatever is currently in the scene. Shared by mesh changes and the reset control. */
+  const frameCamera = useCallback(() => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
-    if (!scene || !camera || !controls) return;
-
-    if (contentRef.current) {
-      scene.remove(contentRef.current);
-      contentRef.current = null;
-    }
-    if (!group) return;
-
-    scene.add(group);
-    contentRef.current = group;
+    const content = contentRef.current;
+    if (!camera || !controls || !content) return;
 
     const sphere = new THREE.Box3()
-      .setFromObject(group)
+      .setFromObject(content)
       .getBoundingSphere(new THREE.Sphere());
     const distance = (sphere.radius * 1.35) / Math.tan((camera.fov * Math.PI) / 360);
 
@@ -149,8 +148,26 @@ export function Viewer({ group, className }: ViewerProps) {
     controls.minDistance = sphere.radius * 0.4;
     controls.maxDistance = distance * 4;
     controls.update();
-  }, [group]);
+  }, []);
+
+  useImperativeHandle(ref, () => ({ resetView: frameCamera }), [frameCamera]);
+
+  // Swap in the current mesh, then frame it.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    if (contentRef.current) {
+      scene.remove(contentRef.current);
+      contentRef.current = null;
+    }
+    if (!group) return;
+
+    scene.add(group);
+    contentRef.current = group;
+    frameCamera();
+  }, [group, frameCamera]);
 
   // relative so the absolutely-positioned canvas anchors to this box.
   return <div ref={mountRef} className={cn('relative', className)} />;
-}
+});

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as THREE from 'three';
 import { Button } from '../components/ui/Button';
-import { Field } from '../components/ui/Field';
+import { NumberField } from '../components/ui/NumberField';
 import { Panel } from '../components/ui/Panel';
 import { Dropzone, MAX_UPLOAD_BYTES } from '../components/Dropzone';
-import { Viewer } from '../components/Viewer';
+import { Viewer, type ViewerHandle } from '../components/Viewer';
 import { ArtworkPreview } from '../components/ArtworkPreview';
 import { cn } from '../lib/cn';
 import { parseSvgLayers, SvgParseError, type ParsedSvg } from '../lib/svgLayers';
@@ -17,17 +17,16 @@ import {
 import { downloadStl, stlFilename } from '../lib/exportStl';
 
 const DEFAULT_CONFIG: MeshConfig = {
-  // Defaults suggested in requirements §5.3.
   widthMm: 120,
   baseMm: 2,
-  layerMm: 1,
+  /*
+   * 0.4 mm rather than the 1 mm floated in requirements §5.3. A step of 1 mm
+   * makes a ten-color sign 11 mm thick, where small regions read as pillars
+   * instead of color; 0.4 mm is also a common FDM layer height, so steps land
+   * on whole printed layers.
+   */
+  layerMm: 0.4,
 };
-
-/** Parses a numeric input without letting an empty field become NaN. */
-function toNumber(value: string, fallback: number): number {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
 
 export function Editor() {
   const [fileName, setFileName] = useState<string | null>(null);
@@ -38,9 +37,9 @@ export function Editor() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [stale, setStale] = useState(false);
-  const [view, setView] = useState<'artwork' | 'mesh'>('artwork');
   /** Layer row under the cursor, isolated in the flat preview. */
   const [hovered, setHovered] = useState<number | null>(null);
+  const viewerRef = useRef<ViewerHandle>(null);
 
   // The built group is a three.js resource, not React state to be GC'd — it
   // has to be disposed explicitly when replaced or unmounted.
@@ -74,8 +73,6 @@ export function Editor() {
     setStats(null);
     setError(null);
     setStale(false);
-    // Without this the pane would stay on a mesh tab that no longer has a mesh.
-    setView('artwork');
     setHovered(null);
   }, []);
 
@@ -107,8 +104,7 @@ export function Editor() {
         setFileName(file.name);
         setStats(null);
         setStale(false);
-        setView('artwork');
-        setHovered(null);
+            setHovered(null);
       } catch (cause) {
         setError(
           cause instanceof SvgParseError ? cause.message : 'That SVG could not be read.',
@@ -141,7 +137,6 @@ export function Editor() {
         });
         setStats({ triangles: built.triangles, depth: built.sizeMm.depth });
         setStale(false);
-        setView('mesh');
       } catch (cause) {
         setError('The mesh could not be built from this artwork.');
         console.error('Mesh build failed', cause);
@@ -183,43 +178,51 @@ export function Editor() {
           <div className="flex flex-col gap-6">
             <Panel title="Dimensions">
               <div className="flex flex-col gap-5">
-                <Field
+                <NumberField
                   label="Width"
-                  type="number"
+                  unit="mm"
                   min={1}
-                  step={1}
-                  suffix="mm"
+                  max={1000}
+                  step={5}
                   value={config.widthMm}
-                  onChange={(e) => update({ widthMm: toNumber(e.target.value, config.widthMm) })}
+                  onChange={(widthMm) => update({ widthMm })}
                 />
-                <div className="flex flex-col gap-2">
+                <div className="flex items-baseline justify-between gap-2">
                   <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
                     Height
                   </span>
                   <p className="font-mono text-sm tabular-nums text-graphite">
-                    {heightMm ? `${heightMm.toFixed(1)} mm` : '—'}{' '}
-                    <span className="text-graphite/70">(from aspect)</span>
+                    {heightMm ? `${heightMm.toFixed(1)}` : '—'}
+                    <span className="ml-1 text-graphite/70">mm</span>
                   </p>
                 </div>
-                <Field
+                <NumberField
                   label="Base thickness"
-                  type="number"
-                  min={0.1}
-                  step={0.1}
-                  suffix="mm"
+                  unit="mm"
+                  min={0.2}
+                  max={50}
+                  step={0.2}
                   value={config.baseMm}
-                  onChange={(e) => update({ baseMm: toNumber(e.target.value, config.baseMm) })}
+                  onChange={(baseMm) => update({ baseMm })}
                 />
-                <Field
+                <NumberField
                   label="Layer step"
-                  type="number"
+                  unit="mm"
                   min={0.1}
+                  max={20}
                   step={0.1}
-                  suffix="mm"
                   hint="Added per layer above the base."
                   value={config.layerMm}
-                  onChange={(e) => update({ layerMm: toNumber(e.target.value, config.layerMm) })}
+                  onChange={(layerMm) => update({ layerMm })}
                 />
+              </div>
+            </Panel>
+
+            {/* Sits directly above the layer list so hovering a row highlights
+                the region right next to it, rather than across the screen. */}
+            <Panel title="Artwork">
+              <div className="flex h-40 items-center justify-center">
+                <ArtworkPreview parsed={parsed} highlightIndex={hovered} />
               </div>
             </Panel>
 
@@ -275,45 +278,45 @@ export function Editor() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-3">
+          {/* Sticky so the mesh stays on screen while scrolling a long layer
+              list — with ten layers the sidebar is far taller than the viewer. */}
+          <div className="flex flex-col gap-3 lg:sticky lg:top-20 lg:self-start">
             <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-1 rounded-[3px] border border-rule bg-bench p-1">
-                {(['artwork', 'mesh'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    disabled={mode === 'mesh' && !group}
-                    onClick={() => setView(mode)}
-                    className={cn(
-                      'rounded-[2px] px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors',
-                      'disabled:cursor-not-allowed disabled:opacity-40',
-                      view === mode ? 'bg-bench-2 text-chalk' : 'text-graphite hover:text-chalk',
-                    )}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-              {view === 'mesh' && group && (
-                <p className="font-mono text-[11px] text-graphite">
+              <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
+                Mesh
+              </span>
+              {group && (
+                <p className="hidden font-mono text-[11px] text-graphite sm:block">
                   Drag to rotate · scroll to zoom · right-drag to pan
                 </p>
               )}
             </div>
 
-            <div className="relative h-[420px] overflow-hidden rounded-panel border border-rule lg:h-[560px]">
-              {/* The viewer stays mounted while the flat preview is showing, so
-                  the camera keeps its position instead of resetting on toggle. */}
-              <Viewer group={group} className={view === 'mesh' ? 'size-full' : 'hidden'} />
+            <div className="relative h-[420px] overflow-hidden rounded-panel border border-rule lg:h-[620px]">
+              <Viewer ref={viewerRef} group={group} className="size-full" />
 
-              {view === 'artwork' && (
-                <div className="absolute inset-0 p-8">
-                  <ArtworkPreview parsed={parsed} highlightIndex={hovered} />
+              {group ? (
+                <button
+                  type="button"
+                  onClick={() => viewerRef.current?.resetView()}
+                  className={cn(
+                    'absolute right-3 top-3 rounded-[3px] border border-rule-strong bg-mat/85 px-3 py-1.5 backdrop-blur',
+                    'font-mono text-[11px] uppercase tracking-[0.12em] text-graphite transition-colors',
+                    'hover:border-signal hover:text-chalk',
+                  )}
+                >
+                  Center view
+                </button>
+              ) : (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
+                    Generate a mesh to preview it
+                  </p>
                 </div>
               )}
             </div>
 
-            {view === 'mesh' && stats ? (
+            {stats ? (
               <p className="font-mono text-[11px] tabular-nums text-graphite">
                 {config.widthMm.toFixed(0)} × {heightMm?.toFixed(1)} × {stats.depth.toFixed(2)} mm
                 {' · '}
@@ -321,8 +324,7 @@ export function Editor() {
               </p>
             ) : (
               <p className="font-mono text-[11px] text-graphite">
-                {parsed.layers.length} color layers, drawn from the parsed geometry — this is
-                exactly what gets extruded.
+                {parsed.layers.length} color layers ready to extrude.
               </p>
             )}
           </div>
