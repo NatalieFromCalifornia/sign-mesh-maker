@@ -1,4 +1,5 @@
 import ImageTracer, { type TracerOptions } from 'imagetracerjs';
+import { quantize } from './quantize';
 
 /**
  * Longest edge the tracer sees. Tracing cost grows with pixel count, and a sign
@@ -81,33 +82,35 @@ export interface TraceResult {
 function traceOptions(colorCount: number): Partial<TracerOptions> {
   return {
     numberofcolors: colorCount,
-    // Deterministic sampling: the same image and count must trace identically,
-    // or nudging the color count would reshuffle unrelated regions.
+    // Ignored once `pal` is supplied, but kept consistent for clarity.
     colorsampling: 2,
     /*
      * Grain control. Antialiased edges in the source produce in-between pixels,
      * and the quantizer happily spends palette entries on them — which is what
      * turned clean artwork into speckle and inflated the layer count.
      *
-     * - blurradius smooths those edge pixels before quantizing.
-     * - more quant cycles converge the remaining colors onto real ones.
-     * - a larger pathomit drops the small stray paths that survive anyway.
+     * The fringe of in-between colors along antialiased edges is removed in
+     * quantize.ts, by discarding clusters that cover almost none of the image.
+     * What is left here is smoothing the geometry:
      *
-     * mincolorratio looks like the right knob for dropping rare colors, but the
-     * tracer implements it by replacing under-used palette entries with
-     * `Math.random()` — injecting arbitrary colors and making the same image
-     * trace differently each run. Near-identical colors are folded afterwards
-     * by mergeSimilarColors instead, which is deterministic.
+     * - blurradius takes the hard staircase off edges before they are traced.
+     * - looser line and curve tolerance fits one long segment where a tight fit
+     *   would chase every pixel of the staircase, which is what made straight
+     *   edges come back jagged.
+     * - pathomit drops the small stray paths that survive anyway.
+     *
+     * mincolorratio looks like the right knob for dropping rare colors, and is
+     * a trap: the tracer implements it by replacing under-used palette entries
+     * with `Math.random()`, injecting arbitrary colors and making the same
+     * image trace differently each run.
      */
     blurradius: 1,
     blurdelta: 20,
     mincolorratio: 0,
     colorquantcycles: 5,
     pathomit: 16,
-    // Looser line/curve tolerance: fewer, longer segments instead of a jagged
-    // fit to antialiasing noise.
-    ltres: 1.5,
-    qtres: 1.5,
+    ltres: 2,
+    qtres: 2,
     rightangleenhance: true,
     // Strokes would be traced as separate hairline geometry; signs are fills.
     strokewidth: 0,
@@ -137,15 +140,21 @@ export function traceImageData(data: ImageData, colorCount: number): TraceResult
   const clamped = Math.max(MIN_COLOR_COUNT, Math.min(MAX_COLOR_COUNT, Math.round(colorCount)));
   const options = traceOptions(clamped);
 
+  /*
+   * Our own k-means palette (§9.1) rather than the tracer's sampler, which
+   * missed whole colors — see the note in quantize.ts.
+   */
+  const pal = quantize(data, clamped);
+
   let tracedata;
   try {
-    tracedata = ImageTracer.imagedataToTracedata(data, options);
+    tracedata = ImageTracer.imagedataToTracedata(data, { ...options, pal });
   } catch (cause) {
     console.error('Tracing failed', cause);
     throw new RasterError('This image could not be traced. Try fewer colors.');
   }
 
-  const svg = ImageTracer.getsvgstring(tracedata, options);
+  const svg = ImageTracer.getsvgstring(tracedata, { ...options, pal });
 
   /*
    * Deduplicated, because the quantizer targets the requested count but

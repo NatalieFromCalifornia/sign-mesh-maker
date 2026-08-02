@@ -20,6 +20,8 @@ declare module 'imagetracerjs' {
     blurradius: number;
     blurdelta: number;
     layering: 0 | 1;
+    /** Fixed palette. When present the tracer skips its own colour selection. */
+    pal: { r: number; g: number; b: number; a: number }[];
   }
 
   export interface PaletteEntry {

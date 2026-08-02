@@ -271,8 +271,14 @@ export function mergeSimilarColors(colors: string[], threshold: number): string[
   const clusters: { colors: string[] }[] = [];
 
   for (const color of colors) {
+    /*
+     * Every member, not any member. Matching on one member is single-linkage
+     * clustering, which chains: if a mid-tone sits within the threshold of both
+     * black and red, all three collapse together and a whole colour disappears.
+     * Requiring the whole cluster to be close keeps merges tight.
+     */
     const match = clusters.find((cluster) =>
-      cluster.colors.some((member) => colorDistance(member, color) <= threshold),
+      cluster.colors.every((member) => colorDistance(member, color) <= threshold),
     );
     if (match) match.colors.push(color);
     else clusters.push({ colors: [color] });
