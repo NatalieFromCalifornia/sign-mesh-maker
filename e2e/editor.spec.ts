@@ -194,25 +194,59 @@ test('merges selected layers into one at a shared height', async ({ page }) => {
   await expect(rows).toHaveCount(4);
 });
 
-test('merging reduces the height of the generated mesh', async ({ page }) => {
+test('merging rebuilds the mesh without pressing the button', async ({ page }) => {
   await upload(page, 'sign-4-colors.svg');
   const stats = page.getByText(/triangles/);
 
   await generate(page);
   // Four layers on a 2mm base at 0.4mm steps top out at 3.20mm.
   await expect(stats).toContainText('3.20 mm');
-  const before = (await stats.textContent()) ?? '';
 
   await page.locator('input[type=checkbox]').nth(0).check();
   await page.locator('input[type=checkbox]').nth(1).check();
   await page.getByRole('button', { name: 'Merge' }).click();
-  await page.getByRole('button', { name: /regenerate mesh/i }).click();
 
-  /*
-   * Wait for the stats line to actually change. Waiting on "triangles" alone
-   * would pass instantly — it is still on screen from the previous build.
-   */
-  await expect(stats).not.toHaveText(before);
-  // Three layers now, so the stack is one step shorter.
+  // No Regenerate click: a merge changes which layers exist, so leaving the old
+  // mesh up would contradict the layer list. Three layers now, one step shorter.
   await expect(stats).toContainText('2.80 mm');
+  await expect(page.getByText(/regenerate to apply/i)).toHaveCount(0);
+});
+
+test('dimension edits still wait for the button', async ({ page }) => {
+  await upload(page, 'sign-4-colors.svg');
+  const stats = page.getByText(/triangles/);
+
+  await generate(page);
+  const before = (await stats.textContent()) ?? '';
+
+  await page.getByRole('button', { name: 'Increase Width' }).click();
+
+  // §5.6: dimensions are fiddled with continuously and each rebuild costs a
+  // full retriangulation, so these stay manual. The line reports the mesh that
+  // exists, not the config that would produce the next one.
+  await expect(page.getByText(/regenerate to apply/i)).toBeVisible();
+  await expect(stats).toHaveText(before);
+});
+
+test('hovering a layer isolates it in both previews', async ({ page }) => {
+  await upload(page, 'sign-4-colors.svg');
+  await generate(page);
+  await page.waitForTimeout(1200);
+
+  const canvas = page.locator('canvas');
+  const row = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i }).first();
+
+  const plain = await canvas.screenshot();
+  await row.hover();
+  await page.waitForTimeout(500);
+  const hovered = await canvas.screenshot();
+
+  // Other layers fade back, so the rendered frame must differ.
+  expect(Buffer.compare(plain, hovered)).not.toBe(0);
+
+  // The flat preview dims the same layers.
+  const opacities = await page
+    .locator('svg[role=img] > g')
+    .evaluateAll((groups) => groups.map((g) => g.getAttribute('opacity')));
+  expect(opacities.filter((o) => o === '0.15').length).toBeGreaterThan(0);
 });

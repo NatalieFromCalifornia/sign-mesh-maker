@@ -39,7 +39,15 @@ export function Editor() {
   const [parsed, setParsed] = useState<ParsedSvg | null>(null);
   const [config, setConfig] = useState<MeshConfig>(DEFAULT_CONFIG);
   const [group, setGroup] = useState<THREE.Group | null>(null);
-  const [stats, setStats] = useState<{ triangles: number; depth: number } | null>(null);
+  /**
+   * Dimensions of the mesh that was actually built, captured at generation
+   * time. Reporting live config here would describe a mesh that does not exist
+   * yet — the numbers would change the instant a field was edited, while the
+   * object on screen stayed as it was.
+   */
+  const [stats, setStats] = useState<
+    { triangles: number; width: number; height: number; depth: number } | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [stale, setStale] = useState(false);
@@ -163,7 +171,7 @@ export function Editor() {
           if (current) disposeGroup(current);
           return built.group;
         });
-        setStats({ triangles: built.triangles, depth: built.sizeMm.depth });
+        setStats({ triangles: built.triangles, ...built.sizeMm });
         setStale(false);
       } catch (cause) {
         setError('The mesh could not be built from this artwork.');
@@ -230,6 +238,34 @@ export function Editor() {
     setSelected(new Set());
     setStale(true);
   }, []);
+
+  /*
+   * Rebuild automatically when the layer set changes — merging, recolouring or
+   * resetting — but only once a mesh already exists.
+   *
+   * This is a deliberate carve-out from §5.6, not a reversal of it. Merging
+   * changes which layers exist and how tall the stack is, so leaving the old
+   * mesh on screen shows something that no longer corresponds to the layer
+   * list. Dimension edits still wait for the button: they are fiddled with
+   * continuously, and each one costs a full retriangulation.
+   *
+   * generate lives behind a ref so this fires on `assigned` alone. Listing
+   * generate as a dependency would re-run it whenever config changed too,
+   * which is exactly the reactive behaviour §5.6 rules out.
+   */
+  const generateRef = useRef(generate);
+  useEffect(() => {
+    generateRef.current = generate;
+  }, [generate]);
+
+  const didMountAssigned = useRef(false);
+  useEffect(() => {
+    if (!didMountAssigned.current) {
+      didMountAssigned.current = true;
+      return;
+    }
+    if (groupRef.current) generateRef.current();
+  }, [assigned]);
 
   const update = useCallback((patch: Partial<MeshConfig>) => {
     setConfig((current) => ({ ...current, ...patch }));
@@ -429,7 +465,7 @@ export function Editor() {
             </div>
 
             <div className="relative h-[420px] overflow-hidden rounded-panel border border-rule lg:h-[620px]">
-              <Viewer ref={viewerRef} group={group} className="size-full" />
+              <Viewer ref={viewerRef} group={group} highlightIndex={hovered} className="size-full" />
 
               {group ? (
                 <button
@@ -454,7 +490,7 @@ export function Editor() {
 
             {stats ? (
               <p className="font-mono text-[11px] tabular-nums text-graphite">
-                {config.widthMm.toFixed(0)} × {heightMm?.toFixed(1)} × {stats.depth.toFixed(2)} mm
+                {stats.width.toFixed(0)} × {stats.height.toFixed(1)} × {stats.depth.toFixed(2)} mm
                 {' · '}
                 {stats.triangles.toLocaleString()} triangles
               </p>

@@ -12,6 +12,12 @@ function token(name: string, fallback: string): string {
 
 interface ViewerProps {
   group: THREE.Group | null;
+  /**
+   * Index of the layer to isolate, matching the child order of `group`.
+   * buildMesh emits one mesh per layer in layer order, so a row's index in the
+   * sidebar is the same index here.
+   */
+  highlightIndex?: number | null;
   className?: string;
 }
 
@@ -21,7 +27,7 @@ export interface ViewerHandle {
 }
 
 export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(
-  { group, className },
+  { group, highlightIndex = null, className },
   ref,
 ) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -167,6 +173,30 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(
     contentRef.current = group;
     frameCamera();
   }, [group, frameCamera]);
+
+  /*
+   * Isolate the hovered layer by fading the rest back.
+   *
+   * Materials are created per layer in buildMesh, so writing to them here
+   * affects only that layer. depthWrite goes off with transparency, otherwise
+   * a faded layer still occludes the highlighted one behind it and the effect
+   * reads as flicker rather than depth.
+   */
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+
+    content.children.forEach((child, index) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const material = child.material as THREE.MeshStandardMaterial;
+      const faded = highlightIndex !== null && highlightIndex !== index;
+
+      material.transparent = faded;
+      material.opacity = faded ? 0.12 : 1;
+      material.depthWrite = !faded;
+      material.needsUpdate = true;
+    });
+  }, [highlightIndex, group]);
 
   // relative so the absolutely-positioned canvas anchors to this box.
   return <div ref={mountRef} className={cn('relative', className)} />;
