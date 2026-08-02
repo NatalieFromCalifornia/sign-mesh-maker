@@ -10,9 +10,13 @@
     "build": "npm run build --workspace=apps/web",
     "deploy": "wrangler deploy",
     "lint": "npm run lint --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "playwright test",
+    "test:all": "npm run test && npm run test:e2e"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "wrangler": "^4.0.0"
   }
 }

@@ -36,9 +36,28 @@ Firestore rules/indexes (Firebase CLI is already authenticated on this machine):
 firebase deploy --only firestore
 ```
 
+Tests:
+```
+npm run test                     # vitest, jsdom — pure logic and components, seconds
+npm run test:e2e                 # playwright — real browser, starts the dev server itself
+npm run test:all                 # both
+npm --workspace=apps/web run test:watch
+npx playwright test --project=chromium-hidpi    # just the display-scaling project
+npx playwright test -g "STL"                    # single test by name
+E2E_BASE_URL=https://signmaker.nataliepyre.com npx playwright test   # against the deploy
+```
+
+`npm run test:e2e` needs browsers once: `npx playwright install --with-deps chromium` (the `--with-deps` part needs sudo). Both suites run in CI via `.github/workflows/test.yml`.
+
+**Which suite gets a new test.** Anything expressible as pure logic goes in vitest — it runs in seconds and needs no browser. Playwright is for what only exists in a real browser: canvas sizing, WebGL drawing, file upload, downloads. Every bug that reached a user so far had a natural home in one of them:
+- decimal-percentage colors (`rgb(75.7%, …)` from Cairo/Inkscape) → `svgLayers.test.ts`
+- number fields that couldn't be cleared → `NumberField.test.tsx`
+- viewer blank on HiDPI → the `chromium-hidpi` Playwright project
+
+The HiDPI bug was invisible for a while precisely because the harness ran at `deviceScaleFactor: 1`, which is why display scaling is now its own Playwright project rather than an option someone can quietly drop.
+
 Notes:
 - `npm run lint` currently does nothing — no workspace defines a `lint` script and no linter is configured. If you add one, wire it into `apps/web/package.json` so the root script picks it up.
-- There are no tests and no test runner yet.
 
 ## Key architectural constraints (do not deviate without asking)
 - **No backend, ever, by design.** Firebase stays on the Spark (free) plan — no billing account is attached, and it should stay that way. This rules out Firebase Storage and Firebase Cloud Functions. Everything (inpainting, vectorization, mesh generation, STL export) runs client-side in the browser.
