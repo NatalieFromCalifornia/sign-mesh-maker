@@ -17,3 +17,8 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+
+# Third-party artwork used for manual testing. Kept out of the repo: unclear
+# licensing, and the repo is public.
+/deadpool_wolverine_poster.png
+/woman_in_bathtub.svg

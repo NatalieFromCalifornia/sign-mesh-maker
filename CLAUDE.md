@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Sign Maker
 
-Web app that converts a 2D image/SVG into a multi-color 3D-printable STL sign.
+Web app that converts an SVG into a multi-color 3D-printable STL sign.
 
 ## Start here
 - **Build spec:** `docs/requirements.md` — full product/design spec, data model, algorithms, and the suggested implementation phases (§10). Follow that phase order unless told otherwise.
 - **Setup status:** `docs/manual-setup.md` — all manual (browser/console) setup steps are complete as of the checklist in that file. Don't re-suggest doing them; if something in the app doesn't work, check whether it's actually one of the boxes there before assuming setup is incomplete.
-- **Current state:** §10 phases 1–4 are done, plus STL export (§8). Routing, Google auth, SVG *and* raster upload, tracing with a live color-count control, per-color extrusion, the three.js preview, and binary STL download all work end to end. Still to build: inpainting/object removal (§10 phase 5), crop, per-layer color reassignment and merging, flat mode with CSG gaps, and project save/load (phase 9).
-- **Two loops, deliberately different.** Tracing re-runs automatically as the color count changes (debounced, §9.1). Mesh generation never does — it waits for the button (§5.6), because triangulation is the expensive step. Don't "helpfully" make mesh generation reactive.
+- **Vector input only. Raster support was removed deliberately, not left unbuilt.** PNG/JPG/WebP upload, k-means quantization and `imagetracerjs` all existed and were deleted by product decision: traced output was too noisy for printable signs. Do not reintroduce raster input, tracing, or a color-count control without being asked. This also removes any need for the OpenCV.js inpainting in §10 phase 5 and §9.3 — that step only ever applied to raster art.
+- **Current state:** routing, Google auth, SVG upload, per-layer recolouring and merging, per-color extrusion, the three.js preview, and binary STL download all work end to end. Still to build: crop, flat mode with CSG gaps, and project save/load (§10 phase 9).
+- **Mesh generation waits for its button** (§5.6) and must never become reactive to config edits — triangulation is the expensive step. Changing a field marks the mesh stale instead.
 
 ## UI work
 Before building or reshaping any user-facing screen, invoke the `frontend-design:frontend-design` skill and follow it. This applies to new routes, new components, and visual reworks of existing ones — not to logic-only changes that leave the rendered output alone.
@@ -61,7 +62,7 @@ Notes:
 - `npm run lint` currently does nothing — no workspace defines a `lint` script and no linter is configured. If you add one, wire it into `apps/web/package.json` so the root script picks it up.
 
 ## Key architectural constraints (do not deviate without asking)
-- **No backend, ever, by design.** Firebase stays on the Spark (free) plan — no billing account is attached, and it should stay that way. This rules out Firebase Storage and Firebase Cloud Functions. Everything (inpainting, vectorization, mesh generation, STL export) runs client-side in the browser.
+- **No backend, ever, by design.** Firebase stays on the Spark (free) plan — no billing account is attached, and it should stay that way. This rules out Firebase Storage and Firebase Cloud Functions. Everything (SVG parsing, mesh generation, STL export) runs client-side in the browser.
 - **No Firebase Storage.** The SVG and a compressed thumbnail are stored as inline string fields on the Firestore `projects` document (see requirements §6), not as separate files. Keep the combined document under Firestore's 1 MiB limit — validate and warn before save.
 - **Deploy target:** Cloudflare Workers (not classic Pages) via `wrangler.jsonc` at the repo root. Cloudflare's own Git-connected build handles building + deploying the frontend automatically on push — don't add a GitHub Actions job that also deploys the frontend, it would conflict. GitHub Actions here only deploys Firestore rules/indexes.
 - Mesh generation is explicitly triggered by a button, not live/reactive to config changes (see requirements §4 step 5, §5.6).
@@ -74,19 +75,18 @@ Monorepo via npm workspaces (`apps/*`, `packages/*`).
 - `packages/shared` — types only, consumed **directly as TypeScript source** (its `main`/`types` both point at `src/index.ts`; there is no build step). `Project` / `ProjectConfig` / `LayerConfig` here are the contract for the Firestore document shape and must stay in sync with requirements §6 and `firestore.rules`.
 - Root-level Firebase config: `firestore.rules` (owner-only access keyed on `ownerUid`, deny-all fallback), `firestore.indexes.json` (composite index on `ownerUid` + `updatedAt` for the "My Projects" listing — any new project query needs a matching index here).
 
-The client pipeline, which spans several libraries that are already declared as dependencies:
+The client pipeline. Dependencies are deliberately minimal — `konva`/`react-konva` (lasso UI for inpainting) and the standalone `earcut` were removed along with raster support; three ships its own Earcut:
 
 ```
-upload (PNG/JPG/WebP/SVG)
-  → [raster only] mask + inpaint      NOT BUILT — konva lasso UI; OpenCV.js WASM, lazy-loaded
-  → [raster only] quantize + trace     imagetracerjs, downsampled to 700px; palette deduped
-  → 3D config                          crop, mm dimensions, base/layer thickness, per-layer colors
-  → generate mesh (button)             SVG paths → polygons → earcut → three.js extrusion per layer
-  → preview + STL export               three.js viewer; STLExporter, download only, never persisted
-  → save                               Firestore doc: svg + thumbnailDataUrl + config, inline
+upload (SVG)                          fills grouped by colour, one layer each, document order
+  → layer config                      recolour, merge (same colour = one layer, §5.4)
+  → dimensions                        mm width, base thickness, layer step
+  → generate mesh (button)            shapes → earcut → three.js extrusion per layer
+  → preview + STL export              three.js viewer; STLExporter, download only, never persisted
+  → save                              NOT BUILT — Firestore doc: svg + thumbnail + config, inline
 ```
 
-Two things that are easy to get backwards: the palette/vectorization preview *is* meant to re-run near-live (debounced) as the user tunes color count, while mesh generation is *not* — see requirements §5.2 vs §5.6. And heavy compute (OpenCV, triangulation, CSG) belongs in a Web Worker; there is no server to offload to.
+Mesh generation is the only expensive step left, and it stays behind its button (§5.6). If triangulation or CSG ever janks the UI, move it to a Web Worker — there is no server to offload to.
 
 ## Repo artifacts that are dead / misleading
 - There is deliberately no `functions/` directory and no `storage.rules` — both were deleted as leftovers from a pre-Spark-decision scaffold. Cloud Functions and Storage require Blaze and are out of scope (requirements §9). Don't recreate them.

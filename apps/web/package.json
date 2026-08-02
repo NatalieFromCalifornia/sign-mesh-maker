@@ -13,13 +13,9 @@
   },
   "dependencies": {
     "@sign-mesh-maker/shared": "*",
-    "earcut": "^2.2.4",
     "firebase": "^10.13.0",
-    "imagetracerjs": "^1.2.6",
-    "konva": "^9.3.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "react-konva": "^18.2.10",
     "react-router-dom": "^6.26.0",
     "three": "^0.166.0"
   },

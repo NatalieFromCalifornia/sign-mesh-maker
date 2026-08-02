@@ -1,5 +1,13 @@
 # Sign Maker — Design & Requirements Document
 
+> **Scope change — raster input removed.** The product now accepts vector (SVG)
+> input only. Raster upload, palette detection and tracing were built and then
+> removed by decision: traced output was too noisy to make a good printable
+> sign. Everything below describing PNG/JPG input, quantization (§9.1),
+> vectorization (§9.2) and inpainting (§9.3, §10 phase 5) is retained as design
+> history and is **not** the current specification. The cleanup/inpainting step
+> only ever applied to raster art, so it is out of scope too.
+
 **Purpose of this document:** This is a build spec intended to be handed directly to an agentic coding assistant (Claude Code) to implement and deploy the application. It describes the product, user flows, architecture, data model, algorithms, and a phased implementation plan.
 
 ---

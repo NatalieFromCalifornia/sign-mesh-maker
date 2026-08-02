@@ -4,7 +4,6 @@ import {
   averageColor,
   colorDistance,
   groupLayersByColor,
-  mergeSimilarColors,
   parseSvgLayers,
   resolveFill,
   shapeToPathData,
@@ -166,23 +165,3 @@ describe('groupLayersByColor', () => {
   });
 });
 
-describe('mergeSimilarColors', () => {
-  it('collapses near-identical colours onto a shared average', () => {
-    const merged = mergeSimilarColors(['#4d7fbe', '#4f81c0', '#f2681c'], 14);
-    expect(merged[0]).toBe(merged[1]);
-    expect(merged[2]).toBe('#f2681c');
-    expect(new Set(merged).size).toBe(2);
-  });
-
-  it('leaves genuinely distinct colours untouched', () => {
-    const colors = ['#2f9d8f', '#f2681c', '#ffffff', '#2d2b2d'];
-    expect(mergeSimilarColors(colors, 14)).toEqual(colors);
-  });
-
-  it('preserves length and position', () => {
-    const colors = ['#000000', '#010101', '#ffffff'];
-    const merged = mergeSimilarColors(colors, 14);
-    expect(merged).toHaveLength(3);
-    expect(merged[2]).toBe('#ffffff');
-  });
-});

@@ -45,8 +45,8 @@ export function Dropzone({ onFile, disabled }: DropzoneProps) {
           Drop artwork here
         </p>
         <p className="max-w-sm text-sm leading-relaxed text-graphite">
-          SVG, PNG, JPG or WebP, up to 20 MB. Images are traced to vector, and you
-          choose how many colors to keep.
+          SVG only, up to 20 MB. Each fill color becomes a printed layer, so the
+          artwork needs flat filled shapes rather than strokes or text.
         </p>
         <button
           type="button"
@@ -62,7 +62,7 @@ export function Dropzone({ onFile, disabled }: DropzoneProps) {
         <input
           ref={inputRef}
           type="file"
-          accept=".svg,image/svg+xml,image/png,image/jpeg,image/webp"
+          accept=".svg,image/svg+xml"
           className="sr-only"
           onChange={(e) => {
             take(e.target.files);

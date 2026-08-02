@@ -10,20 +10,10 @@ import { cn } from '../lib/cn';
 import {
   averageColor,
   groupLayersByColor,
-  mergeSimilarColors,
   parseSvgLayers,
   SvgParseError,
   type ParsedSvg,
 } from '../lib/svgLayers';
-import {
-  DEFAULT_COLOR_COUNT,
-  MAX_COLOR_COUNT,
-  MIN_COLOR_COUNT,
-  RasterError,
-  fileToImageData,
-  isRasterFile,
-  traceImageData,
-} from '../lib/raster';
 import {
   buildMesh,
   disposeGroup,
@@ -31,12 +21,6 @@ import {
   type MeshConfig,
 } from '../lib/buildMesh';
 import { downloadStl, stlFilename } from '../lib/exportStl';
-
-/**
- * Colors closer than this fold together automatically after tracing. Tuned so
- * quantization artifacts merge while genuinely different filaments don't.
- */
-const SIMILAR_COLOR_THRESHOLD = 14;
 
 const DEFAULT_CONFIG: MeshConfig = {
   widthMm: 120,
@@ -62,11 +46,6 @@ export function Editor() {
   /** Layer row under the cursor, isolated in the flat preview. */
   const [hovered, setHovered] = useState<number | null>(null);
   const viewerRef = useRef<ViewerHandle>(null);
-  /** Source pixels for raster uploads, retraced whenever the color count changes. */
-  const [raster, setRaster] = useState<ImageData | null>(null);
-  const [colorCount, setColorCount] = useState(DEFAULT_COLOR_COUNT);
-  const [palette, setPalette] = useState<string[]>([]);
-  const [tracing, setTracing] = useState(false);
   /** Per-source-layer color overrides; same color on two layers merges them (§5.4). */
   const [assigned, setAssigned] = useState<string[]>([]);
   /** Indices into the merged group list, for the merge action. */
@@ -120,9 +99,6 @@ export function Editor() {
     setError(null);
     setStale(false);
     setHovered(null);
-    setRaster(null);
-    setPalette([]);
-    setColorCount(DEFAULT_COLOR_COUNT);
     setAssigned([]);
     setSelected(new Set());
   }, []);
@@ -137,8 +113,8 @@ export function Editor() {
       }
 
       const isSvg = file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg');
-      if (!isSvg && !isRasterFile(file)) {
-        setError('Unsupported file. Upload an SVG, PNG, JPG or WebP.');
+      if (!isSvg) {
+        setError('Only SVG is supported. Convert artwork to SVG and try again.');
         return;
       }
 
@@ -155,22 +131,11 @@ export function Editor() {
 
         setAssigned([]);
         setSelected(new Set());
-
-        if (isSvg) {
-          setRaster(null);
-          setParsed(parseSvgLayers(await file.text()));
-        } else {
-          // Vector art comes from the tracing effect below, which reruns as the
-          // color count changes.
-          setParsed(null);
-          setRaster(await fileToImageData(file));
-        }
+        setParsed(parseSvgLayers(await file.text()));
       } catch (cause) {
         setFileName(null);
         setError(
-          cause instanceof SvgParseError || cause instanceof RasterError
-            ? cause.message
-            : 'That file could not be read.',
+          cause instanceof SvgParseError ? cause.message : 'That file could not be read.',
         );
         console.error('Upload failed', cause);
       } finally {
@@ -179,61 +144,6 @@ export function Editor() {
     },
     [],
   );
-
-  /*
-   * Retracing is the fast, near-live loop of requirements §9.1 — deliberately
-   * unlike mesh generation, which stays behind an explicit button (§5.6).
-   * Debounced so dragging the color count doesn't queue a trace per keystroke.
-   */
-  useEffect(() => {
-    if (!raster) return;
-    let cancelled = false;
-    setTracing(true);
-
-    const timer = window.setTimeout(() => {
-      // Yield first so the tracing indicator paints before the main thread blocks.
-      requestAnimationFrame(() => {
-        if (cancelled) return;
-        try {
-          const { svg, palette } = traceImageData(raster, colorCount);
-          if (cancelled) return;
-          const next = parseSvgLayers(svg);
-
-          /*
-           * Quantizing hands back near-identical entries — several barely
-           * distinguishable blues — that would print as separate layers for no
-           * visible gain. Fold them before the user ever sees them. Only for
-           * traced rasters: an SVG's colors were chosen deliberately.
-           */
-          const folded = mergeSimilarColors(
-            next.layers.map((l) => l.color),
-            SIMILAR_COLOR_THRESHOLD,
-          );
-
-          setPalette(palette);
-          setParsed(next);
-          setAssigned(folded);
-          setSelected(new Set());
-          setError(null);
-        } catch (cause) {
-          if (cancelled) return;
-          setError(
-            cause instanceof RasterError || cause instanceof SvgParseError
-              ? cause.message
-              : 'This image could not be traced.',
-          );
-          console.error('Trace failed', cause);
-        } finally {
-          if (!cancelled) setTracing(false);
-        }
-      });
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [raster, colorCount]);
 
   /*
    * Explicitly triggered, never reactive to config edits — requirements §5.6,
@@ -346,56 +256,11 @@ export function Editor() {
         </p>
       )}
 
-      {!parsed && !raster ? (
+      {!parsed ? (
         <Dropzone onFile={(f) => void onFile(f)} disabled={busy} />
-      ) : !parsed ? (
-        <p className="py-16 text-center font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
-          Tracing image…
-        </p>
       ) : (
         <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
           <div className="flex flex-col gap-6">
-            {raster && (
-              <Panel
-                title={tracing ? 'Tracing…' : `Tracing · ${palette.length} colors`}
-                description="Updates as you change the count — unlike the mesh, which waits for the button."
-              >
-                <div className="flex flex-col gap-4">
-                  <NumberField
-                    label="Colors"
-                    min={MIN_COLOR_COUNT}
-                    max={MAX_COLOR_COUNT}
-                    step={1}
-                    value={colorCount}
-                    onChange={setColorCount}
-                  />
-                  {palette.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {palette.map((color, i) => (
-                        <span
-                          key={`${color}-${i}`}
-                          title={color}
-                          className="size-5 rounded-[2px] border border-rule-strong"
-                          style={{ backgroundColor: color }}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {!tracing && palette.length > 0 && palette.length < colorCount && (
-                    <p className="text-sm leading-relaxed text-graphite">
-                      {colorCount} requested, {palette.length} distinct after quantizing — this
-                      artwork doesn’t hold more.
-                    </p>
-                  )}
-                  {colorCount > 12 && (
-                    <p className="text-sm leading-relaxed text-graphite">
-                      Above about 12 colors the mesh gets heavy and the print gets slow.
-                    </p>
-                  )}
-                </div>
-              </Panel>
-            )}
-
             <Panel title="Dimensions">
               <div className="flex flex-col gap-5">
                 <NumberField

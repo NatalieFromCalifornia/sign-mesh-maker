@@ -1,6 +1,9 @@
 # Sign Maker
 
-Turn a 2D image or SVG into a multi-color, 3D-printable STL sign.
+Turn an SVG into a multi-color, 3D-printable STL sign.
+
+Vector input only — each fill color becomes a printed layer. Raster input was
+removed by decision; see the scope note at the top of `docs/requirements.md`.
 
 See `docs/requirements.md` for the full product/design spec — hand that file
 to Claude Code as the primary build brief.
@@ -14,9 +17,9 @@ npm run dev
 
 ## Structure
 
-- `apps/web` — React + three.js frontend (deployed to Cloudflare Pages). This
-  is the entire app — there is no backend. Vectorization, inpainting, and mesh
-  generation all run client-side in the browser.
+- `apps/web` — React + three.js frontend (deployed to Cloudflare Workers as
+  static assets). This is the entire app — there is no backend. SVG parsing and
+  mesh generation run client-side in the browser.
 - `packages/shared` — shared TypeScript types (project/config schema)
 - `firestore.rules`, `firebase.json`, `firestore.indexes.json` — Firebase
   project configuration (Auth + Firestore only, Spark/free plan — no billing

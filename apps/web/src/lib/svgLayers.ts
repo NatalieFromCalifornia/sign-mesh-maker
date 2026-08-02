@@ -258,42 +258,6 @@ export function groupLayersByColor(layers: SvgLayer[], assigned: string[]): Laye
 }
 
 /**
- * Collapses layers whose colors are within `threshold` of each other.
- *
- * Quantizing a raster hands back near-identical entries — several barely
- * distinguishable blues — that become separate printed layers for no visible
- * benefit. Each cluster is replaced by its average color.
- *
- * Applied to traced rasters only. An SVG's colors were chosen deliberately by
- * whoever drew it, and silently fusing two of them would be a liberty.
- */
-export function mergeSimilarColors(colors: string[], threshold: number): string[] {
-  const clusters: { colors: string[] }[] = [];
-
-  for (const color of colors) {
-    /*
-     * Every member, not any member. Matching on one member is single-linkage
-     * clustering, which chains: if a mid-tone sits within the threshold of both
-     * black and red, all three collapse together and a whole colour disappears.
-     * Requiring the whole cluster to be close keeps merges tight.
-     */
-    const match = clusters.find((cluster) =>
-      cluster.colors.every((member) => colorDistance(member, color) <= threshold),
-    );
-    if (match) match.colors.push(color);
-    else clusters.push({ colors: [color] });
-  }
-
-  const representative = new Map<string, string>();
-  for (const cluster of clusters) {
-    const merged = averageColor(cluster.colors);
-    for (const color of cluster.colors) representative.set(color, merged);
-  }
-
-  return colors.map((color) => representative.get(color) ?? color);
-}
-
-/**
  * Serializes a flattened shape to SVG path data, negating Y to return it to
  * SVG's Y-down convention for on-screen display.
  *
