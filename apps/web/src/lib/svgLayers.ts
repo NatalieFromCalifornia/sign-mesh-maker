@@ -160,6 +160,133 @@ export function parseSvgLayers(svgText: string, curveDivisions = 24): ParsedSvg 
   return { layers, width: size.x, height: size.y, bounds };
 }
 
+export interface Rgb {
+  r: number;
+  g: number;
+  b: number;
+}
+
+export function hexToRgb(hex: string): Rgb {
+  const value = hex.replace('#', '');
+  const full =
+    value.length === 3
+      ? value
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : value;
+  return {
+    r: Number.parseInt(full.slice(0, 2), 16),
+    g: Number.parseInt(full.slice(2, 4), 16),
+    b: Number.parseInt(full.slice(4, 6), 16),
+  };
+}
+
+export function rgbToHex({ r, g, b }: Rgb): string {
+  const channel = (v: number) =>
+    Math.max(0, Math.min(255, Math.round(v)))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
+}
+
+/**
+ * Perceptual-ish distance between two colors, 0–255.
+ *
+ * Weighted toward green because the eye is most sensitive there; this is the
+ * cheap "redmean"-style approximation rather than a full Lab conversion, which
+ * is more precision than deciding "are these the same filament?" needs.
+ */
+export function colorDistance(a: string, b: string): number {
+  const x = hexToRgb(a);
+  const y = hexToRgb(b);
+  const dr = x.r - y.r;
+  const dg = x.g - y.g;
+  const db = x.b - y.b;
+  return Math.sqrt(dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11);
+}
+
+/** Mean of several colors, used when merging layers into one. */
+export function averageColor(colors: string[]): string {
+  if (colors.length === 0) return '#000000';
+  const sum = colors.reduce(
+    (acc, hex) => {
+      const { r, g, b } = hexToRgb(hex);
+      return { r: acc.r + r, g: acc.g + g, b: acc.b + b };
+    },
+    { r: 0, g: 0, b: 0 },
+  );
+  return rgbToHex({
+    r: sum.r / colors.length,
+    g: sum.g / colors.length,
+    b: sum.b / colors.length,
+  });
+}
+
+export interface LayerGroup extends SvgLayer {
+  /** Indices of the source layers folded into this group. */
+  sourceIndices: number[];
+}
+
+/**
+ * Folds layers together by their assigned color, preserving first-appearance
+ * order so z-order stays stable as colors are reassigned.
+ *
+ * This is the merge rule from requirements §5.4: two layers set to the same
+ * color become one mesh layer at one height. Merging in the UI is therefore
+ * just "assign these layers a shared color" — there's no second mechanism.
+ */
+export function groupLayersByColor(layers: SvgLayer[], assigned: string[]): LayerGroup[] {
+  const groups = new Map<string, LayerGroup>();
+
+  layers.forEach((layer, index) => {
+    const color = (assigned[index] ?? layer.color).toLowerCase();
+    const existing = groups.get(color);
+    if (existing) {
+      existing.shapes.push(...layer.shapes);
+      existing.sourceIndices.push(index);
+    } else {
+      groups.set(color, {
+        color,
+        shapes: [...layer.shapes],
+        sourceIndices: [index],
+      });
+    }
+  });
+
+  return [...groups.values()];
+}
+
+/**
+ * Collapses layers whose colors are within `threshold` of each other.
+ *
+ * Quantizing a raster hands back near-identical entries — several barely
+ * distinguishable blues — that become separate printed layers for no visible
+ * benefit. Each cluster is replaced by its average color.
+ *
+ * Applied to traced rasters only. An SVG's colors were chosen deliberately by
+ * whoever drew it, and silently fusing two of them would be a liberty.
+ */
+export function mergeSimilarColors(colors: string[], threshold: number): string[] {
+  const clusters: { colors: string[] }[] = [];
+
+  for (const color of colors) {
+    const match = clusters.find((cluster) =>
+      cluster.colors.some((member) => colorDistance(member, color) <= threshold),
+    );
+    if (match) match.colors.push(color);
+    else clusters.push({ colors: [color] });
+  }
+
+  const representative = new Map<string, string>();
+  for (const cluster of clusters) {
+    const merged = averageColor(cluster.colors);
+    for (const color of cluster.colors) representative.set(color, merged);
+  }
+
+  return colors.map((color) => representative.get(color) ?? color);
+}
+
 /**
  * Serializes a flattened shape to SVG path data, negating Y to return it to
  * SVG's Y-down convention for on-screen display.

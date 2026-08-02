@@ -206,3 +206,51 @@ test('builds a mesh from a traced raster', async ({ page }) => {
   await generate(page);
   await expect(page.getByText(/triangles/)).toBeVisible();
 });
+
+test('recolours a layer', async ({ page }) => {
+  await upload(page, 'sign-4-colors.svg');
+  const rows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
+
+  await page.locator('input[type=color]').first().fill('#ff0000');
+  await expect(rows.first()).toContainText('#ff0000');
+});
+
+test('merges selected layers into one at a shared height', async ({ page }) => {
+  await upload(page, 'sign-4-colors.svg');
+  const rows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
+  await expect(rows).toHaveCount(4);
+
+  await page.locator('input[type=checkbox]').nth(0).check();
+  await page.locator('input[type=checkbox]').nth(1).check();
+  await page.getByRole('button', { name: 'Merge' }).click();
+
+  // §5.4: layers sharing a colour become one printed layer, not two at one height.
+  await expect(rows).toHaveCount(3);
+  await expect(page.getByText('2 merged')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Reset' }).click();
+  await expect(rows).toHaveCount(4);
+});
+
+test('merging reduces the height of the generated mesh', async ({ page }) => {
+  await upload(page, 'sign-4-colors.svg');
+  const stats = page.getByText(/triangles/);
+
+  await generate(page);
+  // Four layers on a 2mm base at 0.4mm steps top out at 3.20mm.
+  await expect(stats).toContainText('3.20 mm');
+  const before = (await stats.textContent()) ?? '';
+
+  await page.locator('input[type=checkbox]').nth(0).check();
+  await page.locator('input[type=checkbox]').nth(1).check();
+  await page.getByRole('button', { name: 'Merge' }).click();
+  await page.getByRole('button', { name: /regenerate mesh/i }).click();
+
+  /*
+   * Wait for the stats line to actually change. Waiting on "triangles" alone
+   * would pass instantly — it is still on screen from the previous build.
+   */
+  await expect(stats).not.toHaveText(before);
+  // Three layers now, so the stack is one step shorter.
+  await expect(stats).toContainText('2.80 mm');
+});

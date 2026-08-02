@@ -7,7 +7,14 @@ import { Dropzone, MAX_UPLOAD_BYTES } from '../components/Dropzone';
 import { Viewer, type ViewerHandle } from '../components/Viewer';
 import { ArtworkPreview } from '../components/ArtworkPreview';
 import { cn } from '../lib/cn';
-import { parseSvgLayers, SvgParseError, type ParsedSvg } from '../lib/svgLayers';
+import {
+  averageColor,
+  groupLayersByColor,
+  mergeSimilarColors,
+  parseSvgLayers,
+  SvgParseError,
+  type ParsedSvg,
+} from '../lib/svgLayers';
 import {
   DEFAULT_COLOR_COUNT,
   MAX_COLOR_COUNT,
@@ -24,6 +31,12 @@ import {
   type MeshConfig,
 } from '../lib/buildMesh';
 import { downloadStl, stlFilename } from '../lib/exportStl';
+
+/**
+ * Colors closer than this fold together automatically after tracing. Tuned so
+ * quantization artifacts merge while genuinely different filaments don't.
+ */
+const SIMILAR_COLOR_THRESHOLD = 14;
 
 const DEFAULT_CONFIG: MeshConfig = {
   widthMm: 120,
@@ -54,6 +67,10 @@ export function Editor() {
   const [colorCount, setColorCount] = useState(DEFAULT_COLOR_COUNT);
   const [palette, setPalette] = useState<string[]>([]);
   const [tracing, setTracing] = useState(false);
+  /** Per-source-layer color overrides; same color on two layers merges them (§5.4). */
+  const [assigned, setAssigned] = useState<string[]>([]);
+  /** Indices into the merged group list, for the merge action. */
+  const [selected, setSelected] = useState<Set<number>>(new Set());
 
   // The built group is a three.js resource, not React state to be GC'd — it
   // has to be disposed explicitly when replaced or unmounted.
@@ -72,9 +89,24 @@ export function Editor() {
     return (parsed.height / parsed.width) * config.widthMm;
   }, [parsed, config.widthMm]);
 
+  /*
+   * Everything downstream — preview, heights, mesh — runs on the merged view,
+   * so assigning two layers the same color genuinely produces one printed
+   * layer rather than two at the same height.
+   */
+  const groups = useMemo(
+    () => (parsed ? groupLayersByColor(parsed.layers, assigned) : []),
+    [parsed, assigned],
+  );
+
+  const effective = useMemo(
+    () => (parsed ? { ...parsed, layers: groups } : null),
+    [parsed, groups],
+  );
+
   const layers = useMemo(
-    () => (parsed ? layerAssignments(parsed, config) : []),
-    [parsed, config],
+    () => (effective ? layerAssignments(effective, config) : []),
+    [effective, config],
   );
 
   const reset = useCallback(() => {
@@ -91,6 +123,8 @@ export function Editor() {
     setRaster(null);
     setPalette([]);
     setColorCount(DEFAULT_COLOR_COUNT);
+    setAssigned([]);
+    setSelected(new Set());
   }, []);
 
   const onFile = useCallback(
@@ -118,6 +152,9 @@ export function Editor() {
         setStale(false);
         setHovered(null);
         setFileName(file.name);
+
+        setAssigned([]);
+        setSelected(new Set());
 
         if (isSvg) {
           setRaster(null);
@@ -160,8 +197,23 @@ export function Editor() {
         try {
           const { svg, palette } = traceImageData(raster, colorCount);
           if (cancelled) return;
+          const next = parseSvgLayers(svg);
+
+          /*
+           * Quantizing hands back near-identical entries — several barely
+           * distinguishable blues — that would print as separate layers for no
+           * visible gain. Fold them before the user ever sees them. Only for
+           * traced rasters: an SVG's colors were chosen deliberately.
+           */
+          const folded = mergeSimilarColors(
+            next.layers.map((l) => l.color),
+            SIMILAR_COLOR_THRESHOLD,
+          );
+
           setPalette(palette);
-          setParsed(parseSvgLayers(svg));
+          setParsed(next);
+          setAssigned(folded);
+          setSelected(new Set());
           setError(null);
         } catch (cause) {
           if (cancelled) return;
@@ -188,7 +240,7 @@ export function Editor() {
    * because building the mesh is the expensive step.
    */
   const generate = useCallback(() => {
-    if (!parsed) return;
+    if (!effective) return;
     setBusy(true);
     setError(null);
 
@@ -196,7 +248,7 @@ export function Editor() {
     // blocks on triangulation.
     requestAnimationFrame(() => {
       try {
-        const built = buildMesh(parsed, config);
+        const built = buildMesh(effective, config);
         setGroup((current) => {
           if (current) disposeGroup(current);
           return built.group;
@@ -210,7 +262,64 @@ export function Editor() {
         setBusy(false);
       }
     });
-  }, [parsed, config]);
+  }, [effective, config]);
+
+  /** Writes an assignment for every source layer folded into group `groupIndex`. */
+  const assignToGroup = useCallback(
+    (groupIndex: number, color: string) => {
+      if (!parsed) return;
+      setAssigned((current) => {
+        const next = parsed.layers.map((layer, i) => current[i] ?? layer.color);
+        for (const source of groups[groupIndex]?.sourceIndices ?? []) {
+          next[source] = color.toLowerCase();
+        }
+        return next;
+      });
+      setStale(true);
+    },
+    [parsed, groups],
+  );
+
+  const recolor = useCallback(
+    (groupIndex: number, color: string) => assignToGroup(groupIndex, color),
+    [assignToGroup],
+  );
+
+  const toggleSelected = useCallback((groupIndex: number) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(groupIndex)) next.delete(groupIndex);
+      else next.add(groupIndex);
+      return next;
+    });
+  }, []);
+
+  /*
+   * Merging is expressed as "give these layers the same color", which is the
+   * rule requirements §5.4 already defines — so there's one mechanism, not two,
+   * and merged layers automatically share a height.
+   */
+  const mergeSelected = useCallback(() => {
+    if (!parsed || selected.size < 2) return;
+    const indices = [...selected];
+    const target = averageColor(indices.map((i) => groups[i].color));
+
+    setAssigned(() => {
+      const next = parsed.layers.map((layer, i) => assigned[i] ?? layer.color);
+      for (const groupIndex of indices) {
+        for (const source of groups[groupIndex].sourceIndices) next[source] = target;
+      }
+      return next;
+    });
+    setSelected(new Set());
+    setStale(true);
+  }, [parsed, selected, groups, assigned]);
+
+  const resetColors = useCallback(() => {
+    setAssigned([]);
+    setSelected(new Set());
+    setStale(true);
+  }, []);
 
   const update = useCallback((patch: Partial<MeshConfig>) => {
     setConfig((current) => ({ ...current, ...patch }));
@@ -333,40 +442,91 @@ export function Editor() {
                 the region right next to it, rather than across the screen. */}
             <Panel title="Artwork">
               <div className="flex h-40 items-center justify-center">
-                <ArtworkPreview parsed={parsed} highlightIndex={hovered} />
+                {effective && <ArtworkPreview parsed={effective} highlightIndex={hovered} />}
               </div>
             </Panel>
 
             <Panel
               title={`Layers · ${layers.length}`}
-              description="One per fill color, lowest first (SVG document order)."
+              description="Lowest first. Recolor a layer, or select two or more to merge."
+              actions={
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={selected.size < 2}
+                    onClick={mergeSelected}
+                  >
+                    Merge
+                  </Button>
+                  {assigned.length > 0 && (
+                    <Button size="sm" variant="ghost" onClick={resetColors}>
+                      Reset
+                    </Button>
+                  )}
+                </div>
+              }
             >
               <ul className="flex flex-col">
-                {layers.map((layer, i) => (
-                  <li
-                    key={`${layer.color}-${i}`}
-                    onMouseEnter={() => setHovered(i)}
-                    onMouseLeave={() => setHovered(null)}
-                    className={cn(
-                      'flex items-center justify-between gap-3 border-b border-rule py-2.5 last:border-b-0',
-                      'transition-colors',
-                      hovered === i && 'bg-bench-2',
-                    )}
-                  >
-                    <span className="flex items-center gap-3">
-                      <span
-                        className="size-4 rounded-[2px] border border-rule-strong"
-                        style={{ backgroundColor: layer.color }}
+                {layers.map((layer, i) => {
+                  const merged = groups[i]?.sourceIndices.length ?? 1;
+                  const isSelected = selected.has(i);
+
+                  return (
+                    <li
+                      key={`${layer.color}-${i}`}
+                      onMouseEnter={() => setHovered(i)}
+                      onMouseLeave={() => setHovered(null)}
+                      className={cn(
+                        'flex items-center gap-3 border-b border-rule py-2.5 last:border-b-0',
+                        'transition-colors',
+                        hovered === i && 'bg-bench-2',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`Select layer ${layer.color}`}
+                        checked={isSelected}
+                        onChange={() => toggleSelected(i)}
+                        className="size-3.5 shrink-0 accent-signal"
                       />
-                      <span className="font-mono text-xs uppercase text-graphite">
-                        {layer.color}
+
+                      {/*
+                        A real colour input, not a swatch. The previous swatch
+                        looked editable and wasn't, which is worse than plainly
+                        read-only.
+                      */}
+                      <label className="relative size-5 shrink-0 cursor-pointer">
+                        <span
+                          className="block size-full rounded-[2px] border border-rule-strong"
+                          style={{ backgroundColor: layer.color }}
+                        />
+                        <input
+                          type="color"
+                          aria-label={`Color for layer ${layer.color}`}
+                          value={layer.color}
+                          onChange={(e) => recolor(i, e.target.value)}
+                          className="absolute inset-0 size-full cursor-pointer opacity-0"
+                        />
+                      </label>
+
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="font-mono text-xs uppercase text-graphite">
+                          {layer.color}
+                        </span>
+                        {merged > 1 && (
+                          <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-graphite/70">
+                            {merged} merged
+                          </span>
+                        )}
                       </span>
-                    </span>
-                    <span className="font-mono text-xs tabular-nums text-chalk">
-                      {layer.heightMm.toFixed(2)} mm
-                    </span>
-                  </li>
-                ))}
+
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-chalk">
+                        {layer.heightMm.toFixed(2)} mm
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             </Panel>
 
@@ -435,7 +595,7 @@ export function Editor() {
               </p>
             ) : (
               <p className="font-mono text-[11px] text-graphite">
-                {parsed.layers.length} color layers ready to extrude.
+                {layers.length} color layers ready to extrude.
               </p>
             )}
           </div>

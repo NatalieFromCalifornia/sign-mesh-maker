@@ -84,11 +84,34 @@ function traceOptions(colorCount: number): Partial<TracerOptions> {
     // Deterministic sampling: the same image and count must trace identically,
     // or nudging the color count would reshuffle unrelated regions.
     colorsampling: 2,
-    colorquantcycles: 3,
+    /*
+     * Grain control. Antialiased edges in the source produce in-between pixels,
+     * and the quantizer happily spends palette entries on them — which is what
+     * turned clean artwork into speckle and inflated the layer count.
+     *
+     * - blurradius smooths those edge pixels before quantizing.
+     * - more quant cycles converge the remaining colors onto real ones.
+     * - a larger pathomit drops the small stray paths that survive anyway.
+     *
+     * mincolorratio looks like the right knob for dropping rare colors, but the
+     * tracer implements it by replacing under-used palette entries with
+     * `Math.random()` — injecting arbitrary colors and making the same image
+     * trace differently each run. Near-identical colors are folded afterwards
+     * by mergeSimilarColors instead, which is deterministic.
+     */
+    blurradius: 1,
+    blurdelta: 20,
+    mincolorratio: 0,
+    colorquantcycles: 5,
+    pathomit: 16,
+    // Looser line/curve tolerance: fewer, longer segments instead of a jagged
+    // fit to antialiasing noise.
+    ltres: 1.5,
+    qtres: 1.5,
+    rightangleenhance: true,
     // Strokes would be traced as separate hairline geometry; signs are fills.
     strokewidth: 0,
     linefilter: true,
-    pathomit: 8,
     roundcoords: 2,
     viewbox: true,
   };

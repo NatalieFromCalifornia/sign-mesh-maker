@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { parseSvgLayers, resolveFill, shapeToPathData, SvgParseError } from './svgLayers';
+import {
+  averageColor,
+  colorDistance,
+  groupLayersByColor,
+  mergeSimilarColors,
+  parseSvgLayers,
+  resolveFill,
+  shapeToPathData,
+  SvgParseError,
+} from './svgLayers';
 import {
   CAIRO_PERCENT_SVG,
   HEX_SIGN_SVG,
@@ -102,5 +111,78 @@ describe('shapeToPathData', () => {
     const ys = [...d.matchAll(/[ML]-?[\d.]+ (-?[\d.]+)/g)].map((m) => Number(m[1]));
     expect(Math.min(...ys)).toBeGreaterThanOrEqual(0);
     expect(Math.max(...ys)).toBeCloseTo(100, 1);
+  });
+});
+
+describe('colour helpers', () => {
+  it('measures distance as zero for identical colours', () => {
+    expect(colorDistance('#ff8800', '#ff8800')).toBe(0);
+  });
+
+  it('rates near-identical blues closer than clearly different colours', () => {
+    const nearlySame = colorDistance('#4d7fbe', '#4f81c0');
+    const different = colorDistance('#4d7fbe', '#f2681c');
+    expect(nearlySame).toBeLessThan(different);
+    expect(nearlySame).toBeLessThan(14);
+  });
+
+  it('averages colours channel-wise', () => {
+    expect(averageColor(['#000000', '#ffffff'])).toBe('#808080');
+    expect(averageColor(['#ff0000', '#00ff00', '#0000ff'])).toBe('#555555');
+  });
+});
+
+describe('groupLayersByColor', () => {
+  const parsed = () => parseSvgLayers(HEX_SIGN_SVG);
+
+  it('leaves layers alone when nothing is reassigned', () => {
+    const layers = parsed().layers;
+    const groups = groupLayersByColor(layers, []);
+    expect(groups).toHaveLength(3);
+    expect(groups.map((g) => g.sourceIndices)).toEqual([[0], [1], [2]]);
+  });
+
+  it('folds layers sharing an assigned colour into one', () => {
+    const layers = parsed().layers;
+    const groups = groupLayersByColor(layers, ['#111111', '#111111', '#222222']);
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0].sourceIndices).toEqual([0, 1]);
+    // Shapes are combined, so the merge produces one printed layer, not two.
+    expect(groups[0].shapes.length).toBe(layers[0].shapes.length + layers[1].shapes.length);
+  });
+
+  it('keeps first-appearance order so z-order is stable', () => {
+    const layers = parsed().layers;
+    const groups = groupLayersByColor(layers, ['#aaaaaa', '#bbbbbb', '#aaaaaa']);
+    expect(groups.map((g) => g.color)).toEqual(['#aaaaaa', '#bbbbbb']);
+    expect(groups[0].sourceIndices).toEqual([0, 2]);
+  });
+
+  it('treats colour case as insignificant', () => {
+    const layers = parsed().layers;
+    const groups = groupLayersByColor(layers, ['#ABCDEF', '#abcdef', '#123456']);
+    expect(groups).toHaveLength(2);
+  });
+});
+
+describe('mergeSimilarColors', () => {
+  it('collapses near-identical colours onto a shared average', () => {
+    const merged = mergeSimilarColors(['#4d7fbe', '#4f81c0', '#f2681c'], 14);
+    expect(merged[0]).toBe(merged[1]);
+    expect(merged[2]).toBe('#f2681c');
+    expect(new Set(merged).size).toBe(2);
+  });
+
+  it('leaves genuinely distinct colours untouched', () => {
+    const colors = ['#2f9d8f', '#f2681c', '#ffffff', '#2d2b2d'];
+    expect(mergeSimilarColors(colors, 14)).toEqual(colors);
+  });
+
+  it('preserves length and position', () => {
+    const colors = ['#000000', '#010101', '#ffffff'];
+    const merged = mergeSimilarColors(colors, 14);
+    expect(merged).toHaveLength(3);
+    expect(merged[2]).toBe('#ffffff');
   });
 });
