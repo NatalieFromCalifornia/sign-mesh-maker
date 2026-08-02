@@ -45,7 +45,8 @@ export function Dropzone({ onFile, disabled }: DropzoneProps) {
           Drop artwork here
         </p>
         <p className="max-w-sm text-sm leading-relaxed text-graphite">
-          SVG works today. PNG and JPG need tracing, which isn’t built yet.
+          SVG, PNG, JPG or WebP, up to 20 MB. Images are traced to vector, and you
+          choose how many colors to keep.
         </p>
         <button
           type="button"
@@ -61,7 +62,7 @@ export function Dropzone({ onFile, disabled }: DropzoneProps) {
         <input
           ref={inputRef}
           type="file"
-          accept=".svg,image/svg+xml,image/png,image/jpeg"
+          accept=".svg,image/svg+xml,image/png,image/jpeg,image/webp"
           className="sr-only"
           onChange={(e) => {
             take(e.target.files);

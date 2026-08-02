@@ -9,7 +9,8 @@ Web app that converts a 2D image/SVG into a multi-color 3D-printable STL sign.
 ## Start here
 - **Build spec:** `docs/requirements.md` — full product/design spec, data model, algorithms, and the suggested implementation phases (§10). Follow that phase order unless told otherwise.
 - **Setup status:** `docs/manual-setup.md` — all manual (browser/console) setup steps are complete as of the checklist in that file. Don't re-suggest doing them; if something in the app doesn't work, check whether it's actually one of the boxes there before assuming setup is incomplete.
-- **Current state:** phases 1–3 of §10 are done, plus STL export (§8). Routing, Google auth, SVG upload, per-color extrusion, the three.js preview, and binary STL download all work end to end. Still to build: raster input (palette detection + tracing, §10 phases 4–5), inpainting, crop, per-layer color reassignment and merging, flat mode with CSG gaps, and project save/load.
+- **Current state:** §10 phases 1–4 are done, plus STL export (§8). Routing, Google auth, SVG *and* raster upload, tracing with a live color-count control, per-color extrusion, the three.js preview, and binary STL download all work end to end. Still to build: inpainting/object removal (§10 phase 5), crop, per-layer color reassignment and merging, flat mode with CSG gaps, and project save/load (phase 9).
+- **Two loops, deliberately different.** Tracing re-runs automatically as the color count changes (debounced, §9.1). Mesh generation never does — it waits for the button (§5.6), because triangulation is the expensive step. Don't "helpfully" make mesh generation reactive.
 
 ## UI work
 Before building or reshaping any user-facing screen, invoke the `frontend-design:frontend-design` skill and follow it. This applies to new routes, new components, and visual reworks of existing ones — not to logic-only changes that leave the rendered output alone.
@@ -76,9 +77,9 @@ Monorepo via npm workspaces (`apps/*`, `packages/*`).
 The client pipeline, which spans several libraries that are already declared as dependencies:
 
 ```
-upload (PNG/JPG/SVG)
-  → [raster only] mask + inpaint      konva/react-konva for the lasso UI; OpenCV.js WASM, lazy-loaded
-  → [raster only] quantize + trace     k-means palette → imagetracerjs → one <path>/<g> per color
+upload (PNG/JPG/WebP/SVG)
+  → [raster only] mask + inpaint      NOT BUILT — konva lasso UI; OpenCV.js WASM, lazy-loaded
+  → [raster only] quantize + trace     imagetracerjs, downsampled to 700px; palette deduped
   → 3D config                          crop, mm dimensions, base/layer thickness, per-layer colors
   → generate mesh (button)             SVG paths → polygons → earcut → three.js extrusion per layer
   → preview + STL export               three.js viewer; STLExporter, download only, never persisted

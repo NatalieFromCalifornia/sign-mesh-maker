@@ -145,7 +145,7 @@ test('exports a well-formed binary STL that sits on the bed', async ({ page }) =
   expect(maxUp).toBeCloseTo(3.2, 2);
 });
 
-test('rejects raster uploads with a specific reason', async ({ page }) => {
+test('reports a corrupt image rather than failing silently', async ({ page }) => {
   await page.goto('/');
   await page.setInputFiles('input[type=file]', {
     name: 'photo.png',
@@ -153,5 +153,56 @@ test('rejects raster uploads with a specific reason', async ({ page }) => {
     buffer: Buffer.from('not really a png'),
   });
 
-  await expect(page.getByRole('alert')).toContainText(/only svg works right now/i);
+  await expect(page.getByRole('alert')).toContainText(/could not be decoded/i);
+});
+
+test('rejects file types the pipeline cannot handle', async ({ page }) => {
+  await page.goto('/');
+  await page.setInputFiles('input[type=file]', {
+    name: 'notes.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4'),
+  });
+
+  await expect(page.getByRole('alert')).toContainText(/unsupported file/i);
+});
+
+test('traces a raster upload and retraces as the colour count changes', async ({ page }) => {
+  await page.goto('/');
+  await page.setInputFiles('input[type=file]', fixture('photo-4-colors.png'));
+
+  // Tracing is the near-live loop of §9.1; it runs without a button press.
+  await expect(page.getByRole('button', { name: /generate mesh/i })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  const swatches = page.locator('span[title^="#"]');
+  await expect(swatches.first()).toBeVisible();
+
+  // Palette is deduplicated: flat artwork converges below the requested count,
+  // and repeated swatches would promise colours that never print.
+  const titles = await swatches.evaluateAll((els) =>
+    els.map((e) => e.getAttribute('title')),
+  );
+  expect(new Set(titles).size).toBe(titles.length);
+
+  const layerRows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
+  const atEight = await layerRows.count();
+  expect(atEight).toBeGreaterThan(0);
+
+  await page.getByRole('spinbutton', { name: 'Colors' }).fill('3');
+  await expect
+    .poll(async () => layerRows.count(), { timeout: 30_000 })
+    .toBeLessThanOrEqual(atEight);
+});
+
+test('builds a mesh from a traced raster', async ({ page }) => {
+  await page.goto('/');
+  await page.setInputFiles('input[type=file]', fixture('photo-4-colors.png'));
+  await expect(page.getByRole('button', { name: /generate mesh/i })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  await generate(page);
+  await expect(page.getByText(/triangles/)).toBeVisible();
 });
