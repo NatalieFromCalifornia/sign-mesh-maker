@@ -27,7 +27,7 @@ import {
   type MeshConfig,
 } from '../lib/buildMesh';
 import { downloadStl, stlFilename } from '../lib/exportStl';
-import { download3mf, threeMfFilename } from '../lib/export3mf';
+import { DEFAULT_SLOTS, download3mf, threeMfFilename } from '../lib/export3mf';
 import { renderThumbnail } from '../lib/thumbnail';
 import {
   ProjectTooLargeError,
@@ -95,6 +95,8 @@ export function Editor() {
     [parsed, assigned],
   );
   const [lockAspect, setLockAspect] = useState(false);
+  /** Filament slots on the target printer; layers beyond this share a slot. */
+  const [slots, setSlots] = useState(DEFAULT_SLOTS);
 
   // The built group is a three.js resource, not React state to be GC'd — it
   // has to be disposed explicitly when replaced or unmounted.
@@ -817,7 +819,8 @@ export function Editor() {
                 variant="secondary"
                 disabled={!group}
                 onClick={() =>
-                  group && download3mf(group, threeMfFilename(stlFilename(fileName ?? 'sign')))
+                  group &&
+                  download3mf(group, threeMfFilename(stlFilename(fileName ?? 'sign')), slots)
                 }
               >
                 Download 3MF
@@ -829,10 +832,33 @@ export function Editor() {
               >
                 Download STL
               </Button>
-              <p className="text-sm leading-relaxed text-graphite">
-                3MF keeps the colours and the parts aligned. STL is a single
-                uncoloured solid, for tools that need it.
-              </p>
+              <NumberField
+                label="Filament slots"
+                min={1}
+                max={16}
+                step={1}
+                value={slots}
+                hint="How many filaments your printer can load."
+                onChange={setSlots}
+              />
+
+              {layers.length > slots ? (
+                /*
+                 * A slicer collapses colours it has no slot for, and picks which
+                 * ones on its own. Saying so here is the difference between a
+                 * deliberate merge and a surprise at the printer.
+                 */
+                <p className="border-l-2 border-danger pl-3 text-sm leading-relaxed text-danger">
+                  {layers.length} layers but {slots} slots. Your slicer will collapse the
+                  extra colours on its own — merge or delete layers down to {slots} to
+                  choose which.
+                </p>
+              ) : (
+                <p className="text-sm leading-relaxed text-graphite">
+                  3MF keeps the colours, the slot assignments and the alignment. STL is a
+                  single uncoloured solid, for tools that need it.
+                </p>
+              )}
             </div>
 
             <Panel title={projectId ? 'Saved project' : 'Save project'}>

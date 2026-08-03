@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { unzipSync, strFromU8 } from 'fflate';
 import {
+  DEFAULT_SLOTS,
   build3mf,
   buildModelSettings,
   buildModelXml,
@@ -68,10 +69,18 @@ describe('buildModelXml', () => {
     expect(buildModelXml(PARTS)).toContain('unit="millimeter"');
   });
 
-  it('writes one base material per part, with its colour', () => {
+  /*
+   * A colorgroup from the Materials extension, not core basematerials. Slicers
+   * read the former; a file carrying only the latter opened uniformly grey and
+   * then took whatever the filament slots were already set to.
+   */
+  it('carries colour in a materials-extension colorgroup', () => {
     const xml = buildModelXml(PARTS);
-    expect(xml).toContain('displaycolor="#2F9D8FFF"');
-    expect(xml).toContain('displaycolor="#F2681CFF"');
+    expect(xml).toContain('xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02"');
+    expect(xml).toContain('<m:colorgroup id="1">');
+    expect(xml).toContain('<m:color color="#2F9D8FFF"/>');
+    expect(xml).toContain('<m:color color="#F2681CFF"/>');
+    expect(xml).not.toContain('<basematerials');
   });
 
   it('gives every part an object bound to its material', () => {
@@ -120,14 +129,16 @@ describe('buildModelXml', () => {
     expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(6, 3);
   });
 
-  it('escapes characters that would break the XML', () => {
-    const xml = buildModelXml([{ ...part('#ffffff', 'a & b <c>'), name: 'a & b <c>' }]);
-    expect(xml).toContain('a &amp; b &lt;c&gt;');
+  it('keeps user-supplied text out of the model entirely', () => {
+    // Names live in model_settings.config now, so the model carries only
+    // colours and numbers and has nothing a layer name could break.
+    const xml = buildModelXml([{ ...part('#ffffff', 'x'), name: 'a & b <c>' }]);
     expect(xml).not.toContain('a & b <c>');
+    expect(xml).not.toContain('a &amp; b');
   });
 
   it('expands shorthand hex colours', () => {
-    expect(buildModelXml([part('#fff', 'short')])).toContain('displaycolor="#FFFFFFFF"');
+    expect(buildModelXml([part('#fff', 'short')])).toContain('<m:color color="#FFFFFFFF"/>');
   });
 });
 
@@ -151,6 +162,33 @@ describe('buildModelSettings', () => {
     expect(config).toContain('<metadata key="extruder" value="1"/>');
     expect(config).toContain('<metadata key="extruder" value="2"/>');
     expect(config.match(/subtype="normal_part"/g)).toHaveLength(2);
+  });
+
+  it('clamps to the slots the printer actually has', () => {
+    /*
+     * Naming a slot that does not exist leaves the slicer to collapse it
+     * however it likes; the last real slot is at least predictable, and the
+     * editor warns so the merge happens deliberately instead.
+     */
+    const six = Array.from({ length: 6 }, (_, i) => part('#ffffff', `p${i}`, i));
+    const assigned = [...buildModelSettings(six, 4).matchAll(/key="extruder" value="(\d+)"/g)].map(
+      (m) => Number(m[1]),
+    );
+
+    expect(assigned).toEqual([1, 2, 3, 4, 4, 4]);
+    expect(Math.max(...assigned)).toBeLessThanOrEqual(4);
+  });
+
+  it('assigns one slot per part when there is room', () => {
+    const four = Array.from({ length: 4 }, (_, i) => part('#ffffff', `p${i}`, i));
+    const assigned = [...buildModelSettings(four, 4).matchAll(/key="extruder" value="(\d+)"/g)].map(
+      (m) => Number(m[1]),
+    );
+    expect(assigned).toEqual([1, 2, 3, 4]);
+  });
+
+  it('defaults to a common multi-material slot count', () => {
+    expect(DEFAULT_SLOTS).toBe(4);
   });
 
   it('uses part ids that match the components in the model', () => {

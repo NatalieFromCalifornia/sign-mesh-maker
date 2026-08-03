@@ -466,8 +466,8 @@ test.describe('export orientation and 3MF', () => {
     ]);
 
     /*
-     * Core basematerials alone opened as one uniform grey solid — a slicer
-     * takes colour from the filament, so each part must name a slot.
+     * Each part names a filament slot: a slicer takes colour from the filament,
+     * so without this the sign arrives as one uniform grey solid.
      */
     const settings = strFromU8(files['Metadata/model_settings.config']);
     expect(settings.match(/<metadata key="extruder"/g)).toHaveLength(4);
@@ -478,14 +478,18 @@ test.describe('export orientation and 3MF', () => {
     const xml = strFromU8(files['3D/3dmodel.model']);
     expect(xml).toContain('unit="millimeter"');
 
-    // One material per colour, and one build item so the parts stay together.
-    expect(xml.match(/<base /g)).toHaveLength(4);
+    // Colour rides in a materials-extension colorgroup; slicers ignore core
+    // basematerials, which is why an earlier build took the slots' own colours.
+    expect(xml).toContain('<m:colorgroup id="1">');
+    expect(xml).not.toContain('<basematerials');
+    for (const hex of ['#2F9D8FFF', '#F2681CFF', '#E7EDECFF', '#4D7FBEFF']) {
+      expect(xml).toContain(`<m:color color="${hex}"/>`);
+    }
+
+    // One colour per layer, and one build item so the parts stay together.
+    expect(xml.match(/<m:color /g)).toHaveLength(4);
     expect(xml.match(/<item objectid="\d+"\/>/g)).toHaveLength(1);
     expect(xml.match(/<component objectid="\d+"\/>/g)).toHaveLength(4);
-
-    for (const hex of ['#2F9D8FFF', '#F2681CFF', '#E7EDECFF', '#4D7FBEFF']) {
-      expect(xml).toContain(`displaycolor="${hex}"`);
-    }
 
     // Positive octant, as 3MF expects of a build volume.
     const coords = [...xml.matchAll(/(?:x|y|z)="(-?[\d.]+)"/g)].map((m) => Number(m[1]));
@@ -533,5 +537,43 @@ test.describe('deleting layers', () => {
 
     await expect(rows).toHaveCount(1);
     await expect(page.locator('[aria-label^="Delete layer"]').first()).toBeDisabled();
+  });
+});
+
+test.describe('filament slots', () => {
+  test('warns when the sign has more layers than the printer has slots', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const slots = page.getByRole('spinbutton', { name: 'Filament slots' });
+    await expect(slots).toHaveValue('4');
+
+    // Four layers into four slots is fine.
+    await expect(page.getByText(/layers but .* slots/)).toHaveCount(0);
+
+    await slots.fill('2');
+    /*
+     * A slicer collapses colours it has no slot for and picks which on its
+     * own; saying so is the difference between a deliberate merge and a
+     * surprise at the printer.
+     */
+    await expect(page.getByText(/4 layers but 2 slots/)).toBeVisible();
+  });
+
+  test('clamps slot assignments to the printer, not the layer count', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await page.getByRole('spinbutton', { name: 'Filament slots' }).fill('2');
+    await generate(page);
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: /download 3mf/i }).click(),
+    ]);
+
+    const files = unzipSync(readFileSync(await download.path()));
+    const settings = strFromU8(files['Metadata/model_settings.config']);
+    const assigned = [...settings.matchAll(/key="extruder" value="(\d+)"/g)].map((m) =>
+      Number(m[1]),
+    );
+
+    expect(assigned).toEqual([1, 2, 2, 2]);
   });
 });

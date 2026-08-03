@@ -15,15 +15,22 @@ import { strToU8, zipSync } from 'fflate';
  * assembled through <components> so they stay a single build item, with a
  * <basematerials> entry per colour.
  *
- * That alone opens correctly but arrives uniformly grey, because Orca ignores
- * core basematerials. Colour in a slicer comes from the filament, not the mesh,
- * so what it actually needs is each part bound to a slot — which lives in
- * `Metadata/model_settings.config` as an `extruder` key, 1-based. That file is
- * written too, and being additive it leaves the package readable by tools that
- * ignore it.
+ * Colour is carried by an <m:colorgroup> from the Materials & Properties
+ * extension, not by core <basematerials>. Slicers read the former and ignore
+ * the latter — a file carrying only basematerials opens uniformly grey, and
+ * once it is bound to slots without colours it takes whatever the slots
+ * happened to be set to. Orca matches a colorgroup's hex values onto filament
+ * slots by nearest colour.
+ *
+ * `Metadata/model_settings.config` then binds each part to a slot by index.
+ * Slots are finite, so the caller passes how many the printer has: a file
+ * naming extruder 7 on a four-slot machine has its extra colours collapsed
+ * silently, which is worse than being told to merge them first.
  */
 
 const MODEL_NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
+/** Materials & Properties extension — where colour actually lives for slicers. */
+const MATERIAL_NS = 'http://schemas.microsoft.com/3dmanufacturing/material/2015/02';
 const MODEL_REL = 'http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel';
 
 const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8"?>
@@ -137,8 +144,8 @@ export function buildModelXml(parts: ExportPart[]): string {
   }
   const offset = box.isEmpty() ? new THREE.Vector3() : box.min.clone();
 
-  const materials = parts
-    .map((part) => `      <base name="${escapeXml(part.name)}" displaycolor="${displayColor(part.color)}"/>`)
+  const colors = parts
+    .map((part) => `      <m:color color="${displayColor(part.color)}"/>`)
     .join('\n');
 
   const objects = parts
@@ -177,11 +184,11 @@ export function buildModelXml(parts: ExportPart[]): string {
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<model unit="millimeter" xml:lang="en-US" xmlns="${MODEL_NS}">
+<model unit="millimeter" xml:lang="en-US" xmlns="${MODEL_NS}" xmlns:m="${MATERIAL_NS}">
   <resources>
-    <basematerials id="1">
-${materials}
-    </basematerials>
+    <m:colorgroup id="1">
+${colors}
+    </m:colorgroup>
 ${objects}
     <object id="${assemblyId}" type="model">
       <components>
@@ -203,16 +210,24 @@ ${components}
  * 1-based and assigned in layer order; a sign with more colours than the
  * printer has slots needs layers merged down first, which the editor does.
  */
-export function buildModelSettings(parts: ExportPart[]): string {
+export function buildModelSettings(parts: ExportPart[], slots = DEFAULT_SLOTS): string {
   const assemblyId = parts.length + 2;
+  const usable = Math.max(1, Math.round(slots));
 
   const entries = parts
-    .map(
-      (part, index) => `    <part id="${index + 2}" subtype="normal_part">
+    .map((part, index) => {
+      /*
+       * Clamped, not wrapped. Naming a slot the printer does not have leaves
+       * the slicer to collapse it however it likes; sending the overflow to
+       * the last real slot is at least predictable, and the editor warns so
+       * the colours get merged deliberately instead.
+       */
+      const extruder = Math.min(index + 1, usable);
+      return `    <part id="${index + 2}" subtype="normal_part">
       <metadata key="name" value="${escapeXml(part.name)}"/>
-      <metadata key="extruder" value="${index + 1}"/>
-    </part>`,
-    )
+      <metadata key="extruder" value="${extruder}"/>
+    </part>`;
+    })
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -224,21 +239,28 @@ ${entries}
 </config>`;
 }
 
-export function build3mf(parts: ExportPart[]): Uint8Array {
+/** Filament slots on a common multi-material setup. */
+export const DEFAULT_SLOTS = 4;
+
+export function build3mf(parts: ExportPart[], slots = DEFAULT_SLOTS): Uint8Array {
   return zipSync(
     {
       '[Content_Types].xml': strToU8(CONTENT_TYPES),
       '_rels/.rels': strToU8(RELS),
       '3D/3dmodel.model': strToU8(buildModelXml(parts)),
-      'Metadata/model_settings.config': strToU8(buildModelSettings(parts)),
+      'Metadata/model_settings.config': strToU8(buildModelSettings(parts, slots)),
     },
     // Deflate: the XML is highly repetitive and compresses to a fraction.
     { level: 6 },
   );
 }
 
-export function download3mf(group: THREE.Object3D, filename: string): void {
-  const blob = new Blob([build3mf(partsFromGroup(group)) as unknown as BlobPart], {
+export function download3mf(
+  group: THREE.Object3D,
+  filename: string,
+  slots = DEFAULT_SLOTS,
+): void {
+  const blob = new Blob([build3mf(partsFromGroup(group), slots) as unknown as BlobPart], {
     type: 'model/3mf',
   });
 
