@@ -250,3 +250,32 @@ test('hovering a layer isolates it in both previews', async ({ page }) => {
     .evaluateAll((groups) => groups.map((g) => g.getAttribute('opacity')));
   expect(opacities.filter((o) => o === '0.15').length).toBeGreaterThan(0);
 });
+
+test.describe('saving projects', () => {
+  test('offers saving but gates it behind sign-in', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+
+    // Name is seeded from the file so saving needs no typing.
+    await expect(page.getByLabel('Name')).toHaveValue('sign-4-colors');
+    await expect(page.getByRole('button', { name: /^save project$/i })).toBeDisabled();
+    await expect(page.getByText(/sign in.*to save/i)).toBeVisible();
+  });
+
+  test('leaves export working without an account', async ({ page }) => {
+    // §4: the whole pipeline runs anonymously; only saving is gated.
+    await upload(page, 'sign-4-colors.svg');
+    await generate(page);
+    await expect(page.getByRole('button', { name: /download stl/i })).toBeEnabled();
+  });
+
+  test('asks a signed-out visitor to sign in before opening a project', async ({ page }) => {
+    // The security rules would reject this read, so it never fires one.
+    await page.goto('/?project=someprojectid');
+    await expect(page.getByRole('alert')).toContainText(/sign in to open a saved project/i);
+  });
+
+  test('sends a signed-out visitor from the projects list to login', async ({ page }) => {
+    await page.goto('/projects');
+    await expect(page).toHaveURL(/\/login/);
+  });
+});

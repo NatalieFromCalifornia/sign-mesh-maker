@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import type * as THREE from 'three';
 import { Button } from '../components/ui/Button';
 import { NumberField } from '../components/ui/NumberField';
@@ -21,6 +22,13 @@ import {
   type MeshConfig,
 } from '../lib/buildMesh';
 import { downloadStl, stlFilename } from '../lib/exportStl';
+import { renderThumbnail } from '../lib/thumbnail';
+import {
+  ProjectTooLargeError,
+  loadProject,
+  saveProject,
+} from '../lib/projects';
+import { useAuth } from '../auth/AuthProvider';
 
 const DEFAULT_CONFIG: MeshConfig = {
   widthMm: 120,
@@ -35,7 +43,15 @@ const DEFAULT_CONFIG: MeshConfig = {
 };
 
 export function Editor() {
+  const { user, loading: authLoading } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [fileName, setFileName] = useState<string | null>(null);
+  /** Raw markup, kept so a save stores the source rather than a re-serialization. */
+  const [svgText, setSvgText] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
   const [parsed, setParsed] = useState<ParsedSvg | null>(null);
   const [config, setConfig] = useState<MeshConfig>(DEFAULT_CONFIG);
   const [group, setGroup] = useState<THREE.Group | null>(null);
@@ -109,6 +125,10 @@ export function Editor() {
     setHovered(null);
     setAssigned([]);
     setSelected(new Set());
+    setSvgText(null);
+    setProjectId(null);
+    setProjectName('');
+    setSavedAt(null);
   }, []);
 
   const onFile = useCallback(
@@ -139,7 +159,13 @@ export function Editor() {
 
         setAssigned([]);
         setSelected(new Set());
-        setParsed(parseSvgLayers(await file.text()));
+
+        const text = await file.text();
+        setParsed(parseSvgLayers(text));
+        setSvgText(text);
+        setProjectId(null);
+        setSavedAt(null);
+        setProjectName(file.name.replace(/\.svg$/i, ''));
       } catch (cause) {
         setFileName(null);
         setError(
@@ -266,6 +292,118 @@ export function Editor() {
     }
     if (groupRef.current) generateRef.current();
   }, [assigned]);
+
+  /*
+   * Open a saved project from ?project=<id>.
+   *
+   * A query parameter rather than router state so the URL survives a refresh
+   * and can be shared between the projects list and a bookmark.
+   */
+  const requestedProject = searchParams.get('project');
+  useEffect(() => {
+    if (!requestedProject || requestedProject === projectId) return;
+
+    // Wait for the session before deciding; on first paint `user` is null
+    // simply because auth has not resolved yet.
+    if (authLoading) return;
+    if (!user) {
+      // The rules would reject this read anyway. Say what to do instead of
+      // firing a request that can only fail.
+      setError('Sign in to open a saved project.');
+      return;
+    }
+
+    let cancelled = false;
+
+    setBusy(true);
+    void (async () => {
+      try {
+        const project = await loadProject(requestedProject);
+        if (cancelled) return;
+        if (!project) {
+          setError('That project could not be found.');
+          return;
+        }
+
+        const restored = parseSvgLayers(project.svg);
+        setParsed(restored);
+        setSvgText(project.svg);
+        setProjectId(project.id);
+        setProjectName(project.name);
+        setFileName(`${project.name}.svg`);
+        setConfig({
+          widthMm: project.config.widthMm,
+          baseMm: project.config.baseMm,
+          layerMm: project.config.layerMm,
+        });
+        /*
+         * Assignments are matched by original colour, not by index: a saved
+         * project re-parsed by a newer version could produce layers in a
+         * different order, and positional restore would then recolour the
+         * wrong regions.
+         */
+        const byOriginal = new Map(
+          project.config.layers.map((layer) => [layer.originalColor, layer.assignedColor]),
+        );
+        setAssigned(restored.layers.map((layer) => byOriginal.get(layer.color) ?? layer.color));
+        setSelected(new Set());
+        setStats(null);
+        setStale(false);
+        setError(null);
+      } catch (cause) {
+        if (!cancelled) setError('That project could not be opened.');
+        console.error('Project load failed', cause);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [requestedProject, projectId, user, authLoading]);
+
+  const save = useCallback(async () => {
+    if (!parsed || !svgText || !user) return;
+    setSaving(true);
+    setError(null);
+
+    try {
+      const colors = parsed.layers.map((layer, i) => assigned[i] ?? layer.color);
+      const thumbnailDataUrl = await renderThumbnail(parsed, colors);
+
+      const id = await saveProject({
+        id: projectId ?? undefined,
+        ownerUid: user.uid,
+        name: projectName.trim() || 'Untitled sign',
+        svg: svgText,
+        thumbnailDataUrl,
+        config: {
+          widthMm: config.widthMm,
+          baseMm: config.baseMm,
+          layerMm: config.layerMm,
+          layers: parsed.layers.map((layer, i) => ({
+            originalColor: layer.color,
+            assignedColor: colors[i],
+          })),
+        },
+      });
+
+      setProjectId(id);
+      setSavedAt(Date.now());
+      // Reflect the id in the URL so a refresh reopens what is on screen.
+      setSearchParams({ project: id }, { replace: true });
+    } catch (cause) {
+      setError(
+        cause instanceof ProjectTooLargeError
+          ? cause.message
+          : 'That project could not be saved. Please try again.',
+      );
+      console.error('Project save failed', cause);
+    } finally {
+      setSaving(false);
+    }
+  }, [parsed, svgText, user, assigned, projectId, projectName, config, setSearchParams]);
 
   const update = useCallback((patch: Partial<MeshConfig>) => {
     setConfig((current) => ({ ...current, ...patch }));
@@ -448,6 +586,50 @@ export function Editor() {
                 Download STL
               </Button>
             </div>
+
+            <Panel title={projectId ? 'Saved project' : 'Save project'}>
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <label
+                    htmlFor="project-name"
+                    className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite"
+                  >
+                    Name
+                  </label>
+                  <input
+                    id="project-name"
+                    value={projectName}
+                    onChange={(e) => setProjectName(e.target.value)}
+                    placeholder="Untitled sign"
+                    className="h-10 rounded-[3px] border border-rule bg-mat px-3 text-sm text-chalk outline-none placeholder:text-graphite/50 focus:border-rule-strong"
+                  />
+                </div>
+
+                <Button
+                  variant="secondary"
+                  disabled={!user || saving}
+                  onClick={() => void save()}
+                >
+                  {saving ? 'Saving…' : projectId ? 'Save changes' : 'Save project'}
+                </Button>
+
+                {!user ? (
+                  <p className="text-sm leading-relaxed text-graphite">
+                    <Link
+                      to="/login"
+                      className="text-chalk underline underline-offset-4 hover:text-signal"
+                    >
+                      Sign in
+                    </Link>{' '}
+                    to save. The editor and STL export work without an account.
+                  </p>
+                ) : savedAt ? (
+                  <p className="font-mono text-[11px] text-graphite">
+                    Saved {new Date(savedAt).toLocaleTimeString()}
+                  </p>
+                ) : null}
+              </div>
+            </Panel>
           </div>
 
           {/* Sticky so the mesh stays on screen while scrolling a long layer

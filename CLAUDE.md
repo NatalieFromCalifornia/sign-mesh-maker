@@ -10,7 +10,7 @@ Web app that converts an SVG into a multi-color 3D-printable STL sign.
 - **Build spec:** `docs/requirements.md` — full product/design spec, data model, algorithms, and the suggested implementation phases (§10). Follow that phase order unless told otherwise.
 - **Setup status:** `docs/manual-setup.md` — all manual (browser/console) setup steps are complete as of the checklist in that file. Don't re-suggest doing them; if something in the app doesn't work, check whether it's actually one of the boxes there before assuming setup is incomplete.
 - **Vector input only. Raster support was removed deliberately, not left unbuilt.** PNG/JPG/WebP upload, k-means quantization and `imagetracerjs` all existed and were deleted by product decision: traced output was too noisy for printable signs. Do not reintroduce raster input, tracing, or a color-count control without being asked. This also removes any need for the OpenCV.js inpainting in §10 phase 5 and §9.3 — that step only ever applied to raster art.
-- **Current state:** routing, Google auth, SVG upload, per-layer recolouring and merging, per-color extrusion, the three.js preview, and binary STL download all work end to end. Still to build: crop, flat mode with CSG gaps, and project save/load (§10 phase 9).
+- **Current state:** routing, Google auth, SVG upload, per-layer recolouring and merging, per-color extrusion, the three.js preview, binary STL download, and project save/load all work end to end. Still to build: crop (§5.3) and flat mode with CSG gaps (§5.5).
 - **Mesh generation waits for its button** (§5.6) — triangulation is the expensive step, and dimension fields get fiddled with continuously, so changing one marks the mesh stale rather than rebuilding.
   - **One carve-out:** merging, recolouring or resetting layers *does* rebuild automatically, once a mesh exists. Those change which layers exist and how tall the stack is, so the old mesh would contradict the layer list beside it. It fires on the `assigned` array alone, deliberately not on `generate`'s identity — depending on that would drag config changes back into the reactive path.
 - **The stats line describes the mesh that was built**, from `stats` captured at generation time, never live config. Reporting `config.widthMm` there claimed dimensions the on-screen object didn't have.
@@ -75,7 +75,9 @@ Monorepo via npm workspaces (`apps/*`, `packages/*`).
 
 - `apps/web` — the entire application. React 18 + TypeScript + Vite.
 - `packages/shared` — types only, consumed **directly as TypeScript source** (its `main`/`types` both point at `src/index.ts`; there is no build step). `Project` / `ProjectConfig` / `LayerConfig` here are the contract for the Firestore document shape and must stay in sync with requirements §6 and `firestore.rules`.
-- Root-level Firebase config: `firestore.rules` (owner-only access keyed on `ownerUid`, deny-all fallback), `firestore.indexes.json` (composite index on `ownerUid` + `updatedAt` for the "My Projects" listing — any new project query needs a matching index here).
+- Root-level Firebase config: `firestore.rules` (owner-only access keyed on `ownerUid`, deny-all fallback), `firestore.indexes.json` (composite index on `ownerUid` + `updatedAt` for the projects listing — any new project query needs a matching index here, or it fails at runtime rather than at build time).
+
+**Persistence.** `packages/shared` is the stored schema and deliberately narrower than requirements §6: no `cropRect`/`flatMode`/`flatGapMm` (not built), no cached height (derived from the SVG, so a copy can only drift), and no `id`/`order`/`mergedWith` on layers — order is the array index and merging *is* a shared `assignedColor`. Assignments restore by matching `originalColor`, not by index, so a re-parse that reorders layers can't recolour the wrong regions. Saves are refused above `SAFE_DOC_BUDGET` (900 KB) rather than at Firestore's 1 MiB, because the estimate omits field names, indexes and timestamps — hitting the real ceiling would surface a server error the user can't act on.
 
 The client pipeline. Dependencies are deliberately minimal — `konva`/`react-konva` (lasso UI for inpainting) and the standalone `earcut` were removed along with raster support; three ships its own Earcut:
 
@@ -85,7 +87,7 @@ upload (SVG)                          fills grouped by colour, one layer each, d
   → dimensions                        mm width, base thickness, layer step
   → generate mesh (button)            shapes → earcut → three.js extrusion per layer
   → preview + STL export              three.js viewer; STLExporter, download only, never persisted
-  → save                              NOT BUILT — Firestore doc: svg + thumbnail + config, inline
+  → save                              Firestore doc: svg + JPEG thumbnail + config, all inline
 ```
 
 Mesh generation is the only expensive step left, and it stays behind its button (§5.6). If triangulation or CSG ever janks the UI, move it to a Web Worker — there is no server to offload to.
