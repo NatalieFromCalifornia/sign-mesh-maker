@@ -209,3 +209,36 @@ function shapesFromTree(tree: PolyTree): THREE.Shape[] {
   visit(tree);
   return result;
 }
+
+/** Keeps only the part of `subject` inside `clip`. */
+export function intersectShapes(subject: THREE.Shape[], clip: THREE.Shape[]): THREE.Shape[] {
+  if (subject.length === 0 || clip.length === 0) return [];
+
+  const clipper = new Clipper();
+  addOriented(clipper, subject, PolyType.ptSubject);
+  addOriented(clipper, clip, PolyType.ptClip);
+
+  const tree = new PolyTree();
+  if (
+    !clipper.Execute(
+      ClipType.ctIntersection,
+      tree,
+      PolyFillType.pftNonZero,
+      PolyFillType.pftNonZero,
+    )
+  ) {
+    return subject;
+  }
+
+  return shapesFromTree(tree);
+}
+
+/** Axis-aligned rectangle as a shape, for clipping. */
+export function rectShape(minX: number, minY: number, maxX: number, maxY: number): THREE.Shape {
+  return new THREE.Shape([
+    new THREE.Vector2(minX, minY),
+    new THREE.Vector2(maxX, minY),
+    new THREE.Vector2(maxX, maxY),
+    new THREE.Vector2(minX, maxY),
+  ]);
+}

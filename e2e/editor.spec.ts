@@ -12,6 +12,28 @@ async function upload(page: Page, name: string) {
 }
 
 /** Layer checkboxes by label — positional lookup breaks when a control is added above. */
+/**
+ * Drags a crop handle by a fraction of the crop window.
+ *
+ * hover() first so the panel is scrolled into view: boundingBox() reports
+ * viewport coordinates, and on a short viewport the crop panel sits below the
+ * fold, where a raw mouse move lands on nothing.
+ */
+async function dragCropHandle(page: Page, handle: string, fractionOfWidth: number) {
+  const target = page.locator(`[aria-label="Resize crop ${handle}"]`);
+  await target.hover();
+
+  const box = (await page.getByRole('group', { name: 'Crop window' }).boundingBox())!;
+  const handleBox = (await target.boundingBox())!;
+  const cx = handleBox.x + handleBox.width / 2;
+  const cy = handleBox.y + handleBox.height / 2;
+
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + box.width * fractionOfWidth, cy, { steps: 12 });
+  await page.mouse.up();
+}
+
 async function selectLayers(page: Page, ...indices: number[]) {
   const boxes = page.locator('input[aria-label^="Select layer"]');
   for (const index of indices) await boxes.nth(index).check();
@@ -342,5 +364,41 @@ test.describe('flat mode (§5.5)', () => {
     expect([...heights].map(Number).sort((a, b) => a - b)).toEqual(
       expect.arrayContaining([0, 2, 2.4]),
     );
+  });
+});
+
+test.describe('crop (§5.3)', () => {
+  test('crops the artwork and rescales the sign', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const stats = page.getByText(/triangles/);
+    await generate(page);
+    // 200×120 artwork at 120mm wide.
+    await expect(stats).toContainText('120 × 72.0');
+
+    await page.getByRole('button', { name: 'Crop', exact: true }).click();
+    await expect(page.getByRole('group', { name: 'Crop window' })).toBeVisible();
+
+    // Keep roughly the left half.
+    await dragCropHandle(page, 'e', -0.5);
+
+    await page.getByRole('button', { name: 'Done' }).click();
+    await page.getByRole('button', { name: /regenerate mesh/i }).click();
+
+    // Half the width at the same height is a taller sign for a fixed width.
+    await expect(stats).toContainText('120 × 144.0');
+  });
+
+  test('offers a reset only once the artwork is cropped', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await page.getByRole('button', { name: 'Crop', exact: true }).click();
+
+    const reset = page.getByRole('button', { name: 'Reset' });
+    await expect(reset).toHaveCount(0);
+
+    await dragCropHandle(page, 'e', -0.3);
+
+    await expect(reset).toBeVisible();
+    await reset.click();
+    await expect(reset).toHaveCount(0);
   });
 });

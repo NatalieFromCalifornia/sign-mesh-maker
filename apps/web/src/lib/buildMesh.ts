@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { ParsedSvg } from './svgLayers';
-import { insetShapes, subtractShapes, unionShapes } from './offset';
+import type { CropRect } from '@sign-mesh-maker/shared';
+import { insetShapes, intersectShapes, rectShape, subtractShapes, unionShapes } from './offset';
 
 export interface MeshConfig {
   /** Finished width of the sign; height follows from the artwork's aspect. */
@@ -16,6 +17,34 @@ export interface MeshConfig {
   flatMode?: boolean;
   /** Width of the channel between adjacent colours, in mm. */
   flatGapMm?: number;
+  /** Crop window as fractions of the artwork (§5.3); absent means all of it. */
+  crop?: CropRect;
+}
+
+export const FULL_CROP: CropRect = { x: 0, y: 0, width: 1, height: 1 };
+
+export function isFullCrop(crop: CropRect | undefined): boolean {
+  if (!crop) return true;
+  return (
+    crop.x <= 0.0001 && crop.y <= 0.0001 && crop.width >= 0.9999 && crop.height >= 0.9999
+  );
+}
+
+/**
+ * Converts a normalized crop to the shapes' own coordinate space.
+ *
+ * Shapes are stored Y-up while the crop is expressed from the top-left of what
+ * the user sees, so the vertical axis flips here — the top of the crop is the
+ * *maximum* y of the artwork.
+ */
+export function cropBounds(parsed: ParsedSvg, crop: CropRect) {
+  const { min, max } = parsed.bounds;
+  return {
+    minX: min.x + crop.x * parsed.width,
+    maxX: min.x + (crop.x + crop.width) * parsed.width,
+    minY: max.y - (crop.y + crop.height) * parsed.height,
+    maxY: max.y - crop.y * parsed.height,
+  };
 }
 
 /** Default channel width from requirements §5.5. */
@@ -62,7 +91,14 @@ export interface BuiltMesh {
  * so the preview can color them and a future per-color STL export can split
  * them (requirements §5.7).
  */
-export function buildMesh(parsed: ParsedSvg, config: MeshConfig): BuiltMesh {
+export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
+  /*
+   * Crop first, so everything after it — scale, extents, flat-mode unions —
+   * describes the sign that will actually be printed rather than the artwork
+   * it was cut from.
+   */
+  const parsed = cropParsed(source, config.crop);
+
   const scale = config.widthMm / parsed.width;
   const group = new THREE.Group();
   let triangles = 0;
@@ -162,6 +198,29 @@ export function buildMesh(parsed: ParsedSvg, config: MeshConfig): BuiltMesh {
     group,
     sizeMm: { width: size.x, height: size.y, depth: size.z },
     triangles,
+  };
+}
+
+/** Restricts artwork to the crop window, leaving it untouched when there is none. */
+export function cropParsed(parsed: ParsedSvg, crop: CropRect | undefined): ParsedSvg {
+  if (isFullCrop(crop) || !crop) return parsed;
+
+  const { minX, minY, maxX, maxY } = cropBounds(parsed, crop);
+  const window = [rectShape(minX, minY, maxX, maxY)];
+
+  const layers = parsed.layers.map((layer) => ({
+    ...layer,
+    shapes: intersectShapes(layer.shapes, window),
+  }));
+
+  return {
+    ...parsed,
+    layers,
+    // Extents come from the crop, not the surviving geometry: a sign cropped
+    // to a region with empty margins keeps those margins.
+    width: maxX - minX,
+    height: maxY - minY,
+    bounds: new THREE.Box2(new THREE.Vector2(minX, minY), new THREE.Vector2(maxX, maxY)),
   };
 }
 

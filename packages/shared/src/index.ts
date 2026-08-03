@@ -25,9 +25,11 @@ export interface ProjectConfig {
   flatMode?: boolean;
   /** Channel width between touching colours, in mm (§5.5). */
   flatGapMm?: number;
+  /** Crop window (§5.3); absent means the whole artwork. */
+  cropRect?: CropRect;
 
   /*
-   * Not stored, because not built: cropRect (§5.3). Height is not cached
+   * Height is not cached
    * either — §6 suggests caching it, but it derives from the artwork's aspect,
    * and a cached copy can only drift out of agreement with the SVG.
    *
@@ -53,3 +55,19 @@ export interface Project {
 
 /** Row in the projects list; carries no SVG payload. */
 export type ProjectSummary = Omit<Project, 'svg' | 'config'>;
+
+/**
+ * Crop window as fractions of the artwork's bounding box, measured from its
+ * top-left in the orientation the user sees.
+ *
+ * Fractions rather than the artwork units requirements §6 implies: the stored
+ * SVG is re-parsed on load, and any change to how bounds are derived would
+ * silently move a crop expressed in absolute units. A fraction means the same
+ * region regardless.
+ */
+export interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}

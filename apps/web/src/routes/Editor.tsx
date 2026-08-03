@@ -7,6 +7,7 @@ import { Panel } from '../components/ui/Panel';
 import { Dropzone, MAX_UPLOAD_BYTES } from '../components/Dropzone';
 import { Viewer, type ViewerHandle } from '../components/Viewer';
 import { ArtworkPreview } from '../components/ArtworkPreview';
+import { CropOverlay } from '../components/CropOverlay';
 import { cn } from '../lib/cn';
 import {
   averageColor,
@@ -15,9 +16,12 @@ import {
   SvgParseError,
   type ParsedSvg,
 } from '../lib/svgLayers';
+import type { CropRect } from '@sign-mesh-maker/shared';
 import {
   DEFAULT_FLAT_GAP_MM,
+  FULL_CROP,
   buildMesh,
+  isFullCrop,
   disposeGroup,
   layerAssignments,
   type MeshConfig,
@@ -44,6 +48,7 @@ const DEFAULT_CONFIG: MeshConfig = {
   layerMm: 0.4,
   flatMode: false,
   flatGapMm: DEFAULT_FLAT_GAP_MM,
+  crop: FULL_CROP,
 };
 
 export function Editor() {
@@ -80,6 +85,13 @@ export function Editor() {
   const [assigned, setAssigned] = useState<string[]>([]);
   /** Indices into the merged group list, for the merge action. */
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [cropping, setCropping] = useState(false);
+  /** Assigned colour per source layer, for previewing the uncropped artwork. */
+  const assignedColors = useMemo(
+    () => (parsed ? parsed.layers.map((layer, i) => assigned[i] ?? layer.color) : []),
+    [parsed, assigned],
+  );
+  const [lockAspect, setLockAspect] = useState(false);
 
   // The built group is a three.js resource, not React state to be GC'd — it
   // has to be disposed explicitly when replaced or unmounted.
@@ -93,10 +105,18 @@ export function Editor() {
     };
   }, []);
 
+  /*
+   * Aspect comes from the cropped region, not the whole artwork — the width
+   * field describes the sign being printed, so the derived height has to as
+   * well.
+   */
   const heightMm = useMemo(() => {
     if (!parsed) return null;
-    return (parsed.height / parsed.width) * config.widthMm;
-  }, [parsed, config.widthMm]);
+    const crop = config.crop ?? FULL_CROP;
+    const width = parsed.width * crop.width;
+    const height = parsed.height * crop.height;
+    return width > 0 ? (height / width) * config.widthMm : null;
+  }, [parsed, config.widthMm, config.crop]);
 
   /*
    * Everything downstream — preview, heights, mesh — runs on the merged view,
@@ -132,6 +152,8 @@ export function Editor() {
     setAssigned([]);
     setSelected(new Set());
     setSvgText(null);
+    setConfig((current) => ({ ...current, crop: FULL_CROP }));
+    setCropping(false);
     setProjectId(null);
     setProjectName('');
     setSavedAt(null);
@@ -171,6 +193,8 @@ export function Editor() {
         setSvgText(text);
         setProjectId(null);
         setSavedAt(null);
+        setCropping(false);
+        setConfig((current) => ({ ...current, crop: FULL_CROP }));
         setProjectName(file.name.replace(/\.svg$/i, ''));
       } catch (cause) {
         setFileName(null);
@@ -354,6 +378,8 @@ export function Editor() {
           // stepped by definition.
           flatMode: project.config.flatMode ?? false,
           flatGapMm: project.config.flatGapMm ?? DEFAULT_FLAT_GAP_MM,
+          // Absent on projects saved before cropping existed: they were whole.
+          crop: project.config.cropRect ?? FULL_CROP,
         });
         /*
          * Assignments are matched by original colour, not by index: a saved
@@ -410,6 +436,7 @@ export function Editor() {
           layerMm: config.layerMm,
           flatMode: config.flatMode ?? false,
           flatGapMm: config.flatGapMm ?? DEFAULT_FLAT_GAP_MM,
+          cropRect: config.crop ?? FULL_CROP,
           layers: parsed.layers.map((layer, i) => ({
             originalColor: layer.color,
             assignedColor: colors[i],
@@ -543,9 +570,76 @@ export function Editor() {
 
             {/* Sits directly above the layer list so hovering a row highlights
                 the region right next to it, rather than across the screen. */}
-            <Panel title="Artwork">
-              <div className="flex h-40 items-center justify-center">
-                {effective && <ArtworkPreview parsed={effective} highlightIndex={hovered} />}
+            <Panel
+              title="Artwork"
+              actions={
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    size="sm"
+                    variant={cropping ? 'primary' : 'secondary'}
+                    onClick={() => setCropping((on) => !on)}
+                  >
+                    {cropping ? 'Done' : 'Crop'}
+                  </Button>
+                  {!isFullCrop(config.crop) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => update({ crop: FULL_CROP })}
+                    >
+                      Reset
+                    </Button>
+                  )}
+                </div>
+              }
+            >
+              <div className="flex flex-col gap-3">
+                {/*
+                  The preview stays uncropped while the window is being dragged
+                  — the region outside is what you are choosing against, so it
+                  has to remain visible. Everything downstream uses the crop.
+                */}
+                {/*
+                  The box carries the artwork's own aspect so the SVG fills it
+                  exactly. Left to letterbox inside a fixed-height container,
+                  the overlay's fractions would be of the container while the
+                  artwork occupied only part of it — every crop would then be
+                  read against the wrong rectangle.
+                */}
+                <div
+                  className="relative mx-auto w-full"
+                  style={{ aspectRatio: `${parsed.width} / ${parsed.height}` }}
+                >
+                  {effective && (
+                    <ArtworkPreview
+                      parsed={cropping ? parsed : effective}
+                      colors={cropping ? assignedColors : undefined}
+                      highlightIndex={cropping ? null : hovered}
+                    />
+                  )}
+                  {cropping && (
+                    <CropOverlay
+                      value={config.crop ?? FULL_CROP}
+                      onChange={(crop) => update({ crop })}
+                      aspect={parsed.width / parsed.height}
+                      lockAspect={lockAspect}
+                    />
+                  )}
+                </div>
+
+                {cropping && (
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={lockAspect}
+                      onChange={(e) => setLockAspect(e.target.checked)}
+                      className="size-3.5 shrink-0 accent-signal"
+                    />
+                    <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-graphite">
+                      Lock to square
+                    </span>
+                  </label>
+                )}
               </div>
             </Panel>
 

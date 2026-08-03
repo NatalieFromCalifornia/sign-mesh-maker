@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { buildMesh, layerAssignments, layerHeight, type MeshConfig } from './buildMesh';
+import {
+  FULL_CROP,
+  buildMesh,
+  cropParsed,
+  isFullCrop,
+  layerAssignments,
+  layerHeight,
+  type MeshConfig,
+} from './buildMesh';
 import { parseSvgLayers } from './svgLayers';
 import { HEX_SIGN_SVG } from '../test/fixtures';
 
@@ -126,5 +134,67 @@ describe('flat mode (§5.5)', () => {
     // A wide channel must remove noticeably more geometry than a hairline one.
     const hairline = buildMesh(parsed, { ...FLAT, flatGapMm: 0.02 }).triangles;
     expect(buildMesh(parsed, wide).triangles).toBeLessThanOrEqual(hairline);
+  });
+});
+
+describe('crop (§5.3)', () => {
+  const HALF: MeshConfig = {
+    ...CONFIG,
+    crop: { x: 0, y: 0, width: 0.5, height: 1 },
+  };
+
+  it('treats an absent or whole-artwork crop as no crop', () => {
+    expect(isFullCrop(undefined)).toBe(true);
+    expect(isFullCrop(FULL_CROP)).toBe(true);
+    expect(isFullCrop({ x: 0, y: 0, width: 0.5, height: 1 })).toBe(false);
+  });
+
+  it('leaves artwork untouched when the crop covers everything', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    expect(cropParsed(parsed, FULL_CROP)).toBe(parsed);
+  });
+
+  it('reduces the artwork extents to the crop window', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const cropped = cropParsed(parsed, HALF.crop);
+
+    // Fixture is 200×100; the left half is 100×100.
+    expect(cropped.width).toBeCloseTo(100, 3);
+    expect(cropped.height).toBeCloseTo(100, 3);
+  });
+
+  it('measures the crop from the top-left of what the user sees', () => {
+    // Shapes are stored Y-up while the crop is top-down, so the vertical axis
+    // flips. Cropping the top half must keep the artwork's larger y values.
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const topHalf = cropParsed(parsed, { x: 0, y: 0, width: 1, height: 0.5 });
+
+    expect(topHalf.bounds.max.y).toBeCloseTo(parsed.bounds.max.y, 3);
+    expect(topHalf.bounds.min.y).toBeCloseTo(parsed.bounds.max.y - parsed.height / 2, 3);
+  });
+
+  it('drops layers that fall entirely outside the window', () => {
+    // The fixture's white square sits in the right half only.
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const left = cropParsed(parsed, HALF.crop);
+
+    const white = left.layers.find((l) => l.color === '#ffffff');
+    expect(white?.shapes ?? []).toHaveLength(0);
+  });
+
+  it('builds a mesh scaled to the cropped region, not the original', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const { sizeMm } = buildMesh(parsed, HALF);
+
+    // 100×100 artwork at 120mm wide is 120mm tall, where uncropped it was 60.
+    expect(sizeMm.width).toBeCloseTo(120, 2);
+    expect(sizeMm.height).toBeCloseTo(120, 2);
+  });
+
+  it('keeps the sign on the bed after cropping', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const { group } = buildMesh(parsed, HALF);
+    group.updateMatrixWorld(true);
+    expect(new THREE.Box3().setFromObject(group).min.y).toBeCloseTo(0, 3);
   });
 });
