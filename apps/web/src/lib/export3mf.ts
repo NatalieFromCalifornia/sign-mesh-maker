@@ -22,10 +22,12 @@ import { strToU8, zipSync } from 'fflate';
  * happened to be set to. Orca matches a colorgroup's hex values onto filament
  * slots by nearest colour.
  *
- * `Metadata/model_settings.config` then binds each part to a slot by index.
- * Slots are finite, so the caller passes how many the printer has: a file
- * naming extruder 7 on a four-slot machine has its extra colours collapsed
- * silently, which is worse than being told to merge them first.
+ * `Metadata/model_settings.config` then binds each part to a slot by index, and
+ * `Metadata/project_settings.config` declares a filament per slot carrying that
+ * layer's colour. Both are sized to the number of layers rather than to any
+ * assumed printer: Orca lets filaments be added freely, so a ten-colour sign
+ * should arrive as ten filaments. Clamping to a supposed slot count only threw
+ * colours away that the slicer was willing to hold.
  */
 
 const MODEL_NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
@@ -210,24 +212,18 @@ ${components}
  * 1-based and assigned in layer order; a sign with more colours than the
  * printer has slots needs layers merged down first, which the editor does.
  */
-export function buildModelSettings(parts: ExportPart[], slots = DEFAULT_SLOTS): string {
+export function buildModelSettings(parts: ExportPart[]): string {
   const assemblyId = parts.length + 2;
-  const usable = Math.max(1, Math.round(slots));
 
+  // One slot per layer, uncapped: the filament list written alongside declares
+  // exactly this many, so every colour has somewhere to land.
   const entries = parts
-    .map((part, index) => {
-      /*
-       * Clamped, not wrapped. Naming a slot the printer does not have leaves
-       * the slicer to collapse it however it likes; sending the overflow to
-       * the last real slot is at least predictable, and the editor warns so
-       * the colours get merged deliberately instead.
-       */
-      const extruder = Math.min(index + 1, usable);
-      return `    <part id="${index + 2}" subtype="normal_part">
+    .map(
+      (part, index) => `    <part id="${index + 2}" subtype="normal_part">
       <metadata key="name" value="${escapeXml(part.name)}"/>
-      <metadata key="extruder" value="${extruder}"/>
-    </part>`;
-    })
+      <metadata key="extruder" value="${index + 1}"/>
+    </part>`,
+    )
     .join('\n');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -239,28 +235,49 @@ ${entries}
 </config>`;
 }
 
-/** Filament slots on a common multi-material setup. */
-export const DEFAULT_SLOTS = 4;
+/** Six-digit hex, which is the form the filament list expects. */
+function filamentColor(hex: string): string {
+  return displayColor(hex).slice(0, 7);
+}
 
-export function build3mf(parts: ExportPart[], slots = DEFAULT_SLOTS): Uint8Array {
+/**
+ * Declares one filament per layer, carrying that layer's colour.
+ *
+ * This is where a slicer reads slot colours from; without it the parts land on
+ * slots that keep whatever colours were already configured, which is how a
+ * ten-colour sign arrived wearing somebody else's palette.
+ *
+ * Deliberately only the filament arrays — no printer, no print profile. A
+ * fuller config would start overriding machine settings that belong to
+ * whoever opens the file.
+ */
+export function buildProjectSettings(parts: ExportPart[]): string {
+  return JSON.stringify(
+    {
+      filament_colour: parts.map((part) => filamentColor(part.color)),
+      filament_type: parts.map(() => 'PLA'),
+    },
+    null,
+    2,
+  );
+}
+
+export function build3mf(parts: ExportPart[]): Uint8Array {
   return zipSync(
     {
       '[Content_Types].xml': strToU8(CONTENT_TYPES),
       '_rels/.rels': strToU8(RELS),
       '3D/3dmodel.model': strToU8(buildModelXml(parts)),
-      'Metadata/model_settings.config': strToU8(buildModelSettings(parts, slots)),
+      'Metadata/model_settings.config': strToU8(buildModelSettings(parts)),
+      'Metadata/project_settings.config': strToU8(buildProjectSettings(parts)),
     },
     // Deflate: the XML is highly repetitive and compresses to a fraction.
     { level: 6 },
   );
 }
 
-export function download3mf(
-  group: THREE.Object3D,
-  filename: string,
-  slots = DEFAULT_SLOTS,
-): void {
-  const blob = new Blob([build3mf(partsFromGroup(group), slots) as unknown as BlobPart], {
+export function download3mf(group: THREE.Object3D, filename: string): void {
+  const blob = new Blob([build3mf(partsFromGroup(group)) as unknown as BlobPart], {
     type: 'model/3mf',
   });
 

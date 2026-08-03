@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { unzipSync, strFromU8 } from 'fflate';
 import {
-  DEFAULT_SLOTS,
   build3mf,
   buildModelSettings,
   buildModelXml,
+  buildProjectSettings,
   threeMfFilename,
   type ExportPart,
 } from './export3mf';
@@ -31,6 +31,7 @@ describe('build3mf', () => {
     expect(Object.keys(files).sort()).toEqual([
       '3D/3dmodel.model',
       'Metadata/model_settings.config',
+      'Metadata/project_settings.config',
       '[Content_Types].xml',
       '_rels/.rels',
     ]);
@@ -164,32 +165,22 @@ describe('buildModelSettings', () => {
     expect(config.match(/subtype="normal_part"/g)).toHaveLength(2);
   });
 
-  it('clamps to the slots the printer actually has', () => {
+  it('gives every layer its own slot, however many there are', () => {
     /*
-     * Naming a slot that does not exist leaves the slicer to collapse it
-     * however it likes; the last real slot is at least predictable, and the
-     * editor warns so the merge happens deliberately instead.
+     * Previously clamped to an assumed printer capacity, which threw away
+     * colours the slicer was perfectly willing to hold — Orca lets filaments
+     * be added freely, and the filament list written alongside declares
+     * exactly this many.
      */
-    const six = Array.from({ length: 6 }, (_, i) => part('#ffffff', `p${i}`, i));
-    const assigned = [...buildModelSettings(six, 4).matchAll(/key="extruder" value="(\d+)"/g)].map(
+    const ten = Array.from({ length: 10 }, (_, i) => part('#ffffff', `p${i}`, i));
+    const assigned = [...buildModelSettings(ten).matchAll(/key="extruder" value="(\d+)"/g)].map(
       (m) => Number(m[1]),
     );
 
-    expect(assigned).toEqual([1, 2, 3, 4, 4, 4]);
-    expect(Math.max(...assigned)).toBeLessThanOrEqual(4);
+    expect(assigned).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
-  it('assigns one slot per part when there is room', () => {
-    const four = Array.from({ length: 4 }, (_, i) => part('#ffffff', `p${i}`, i));
-    const assigned = [...buildModelSettings(four, 4).matchAll(/key="extruder" value="(\d+)"/g)].map(
-      (m) => Number(m[1]),
-    );
-    expect(assigned).toEqual([1, 2, 3, 4]);
-  });
 
-  it('defaults to a common multi-material slot count', () => {
-    expect(DEFAULT_SLOTS).toBe(4);
-  });
 
   it('uses part ids that match the components in the model', () => {
     // The two files line up by construction, or the assignments attach to
@@ -219,5 +210,41 @@ describe('content types', () => {
   it('declares the config extension so the package stays valid', () => {
     const files = unzipSync(build3mf(PARTS));
     expect(strFromU8(files['[Content_Types].xml'])).toContain('Extension="config"');
+  });
+});
+
+describe('buildProjectSettings', () => {
+  /*
+   * Slot colours are read from here. Without it the parts land on slots that
+   * keep whatever colours were already configured, which is how a ten-colour
+   * sign arrived wearing somebody else's palette.
+   */
+  it('declares one filament per layer, carrying its colour', () => {
+    const settings = JSON.parse(buildProjectSettings(PARTS));
+
+    expect(settings.filament_colour).toEqual(['#2F9D8F', '#F2681C']);
+    expect(settings.filament_type).toEqual(['PLA', 'PLA']);
+  });
+
+  it('keeps the arrays the same length, whatever the layer count', () => {
+    const ten = Array.from({ length: 10 }, (_, i) => part('#2f9d8f', `p${i}`, i));
+    const settings = JSON.parse(buildProjectSettings(ten));
+
+    expect(settings.filament_colour).toHaveLength(10);
+    expect(settings.filament_type).toHaveLength(10);
+  });
+
+  it('writes six-digit hex, not the eight-digit form the mesh uses', () => {
+    const settings = JSON.parse(buildProjectSettings([part('#fff', 'short')]));
+    expect(settings.filament_colour).toEqual(['#FFFFFF']);
+  });
+
+  it('carries only filament settings, so it cannot override a printer profile', () => {
+    // A fuller config would start dictating machine settings that belong to
+    // whoever opens the file.
+    expect(Object.keys(JSON.parse(buildProjectSettings(PARTS))).sort()).toEqual([
+      'filament_colour',
+      'filament_type',
+    ]);
   });
 });

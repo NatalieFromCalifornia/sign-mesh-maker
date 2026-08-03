@@ -461,9 +461,19 @@ test.describe('export orientation and 3MF', () => {
     expect(Object.keys(files).sort()).toEqual([
       '3D/3dmodel.model',
       'Metadata/model_settings.config',
+      'Metadata/project_settings.config',
       '[Content_Types].xml',
       '_rels/.rels',
     ]);
+
+    /*
+     * One filament per layer, carrying its colour. Slot colours are read from
+     * here — without it the parts land on slots keeping whatever colours were
+     * already configured, and the sign wears somebody else's palette.
+     */
+    const project = JSON.parse(strFromU8(files['Metadata/project_settings.config']));
+    expect(project.filament_colour).toEqual(['#2F9D8F', '#F2681C', '#E7EDEC', '#4D7FBE']);
+    expect(project.filament_type).toHaveLength(4);
 
     /*
      * Each part names a filament slot: a slicer takes colour from the filament,
@@ -540,40 +550,3 @@ test.describe('deleting layers', () => {
   });
 });
 
-test.describe('filament slots', () => {
-  test('warns when the sign has more layers than the printer has slots', async ({ page }) => {
-    await upload(page, 'sign-4-colors.svg');
-    const slots = page.getByRole('spinbutton', { name: 'Filament slots' });
-    await expect(slots).toHaveValue('4');
-
-    // Four layers into four slots is fine.
-    await expect(page.getByText(/layers but .* slots/)).toHaveCount(0);
-
-    await slots.fill('2');
-    /*
-     * A slicer collapses colours it has no slot for and picks which on its
-     * own; saying so is the difference between a deliberate merge and a
-     * surprise at the printer.
-     */
-    await expect(page.getByText(/4 layers but 2 slots/)).toBeVisible();
-  });
-
-  test('clamps slot assignments to the printer, not the layer count', async ({ page }) => {
-    await upload(page, 'sign-4-colors.svg');
-    await page.getByRole('spinbutton', { name: 'Filament slots' }).fill('2');
-    await generate(page);
-
-    const [download] = await Promise.all([
-      page.waitForEvent('download'),
-      page.getByRole('button', { name: /download 3mf/i }).click(),
-    ]);
-
-    const files = unzipSync(readFileSync(await download.path()));
-    const settings = strFromU8(files['Metadata/model_settings.config']);
-    const assigned = [...settings.matchAll(/key="extruder" value="(\d+)"/g)].map((m) =>
-      Number(m[1]),
-    );
-
-    expect(assigned).toEqual([1, 2, 2, 2]);
-  });
-});
