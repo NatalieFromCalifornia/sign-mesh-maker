@@ -460,9 +460,20 @@ test.describe('export orientation and 3MF', () => {
     const files = unzipSync(readFileSync(await download.path()));
     expect(Object.keys(files).sort()).toEqual([
       '3D/3dmodel.model',
+      'Metadata/model_settings.config',
       '[Content_Types].xml',
       '_rels/.rels',
     ]);
+
+    /*
+     * Core basematerials alone opened as one uniform grey solid — a slicer
+     * takes colour from the filament, so each part must name a slot.
+     */
+    const settings = strFromU8(files['Metadata/model_settings.config']);
+    expect(settings.match(/<metadata key="extruder"/g)).toHaveLength(4);
+    for (const slot of ['1', '2', '3', '4']) {
+      expect(settings).toContain(`<metadata key="extruder" value="${slot}"/>`);
+    }
 
     const xml = strFromU8(files['3D/3dmodel.model']);
     expect(xml).toContain('unit="millimeter"');
@@ -479,5 +490,48 @@ test.describe('export orientation and 3MF', () => {
     // Positive octant, as 3MF expects of a build volume.
     const coords = [...xml.matchAll(/(?:x|y|z)="(-?[\d.]+)"/g)].map((m) => Number(m[1]));
     expect(Math.min(...coords)).toBeGreaterThanOrEqual(0);
+  });
+});
+
+test.describe('deleting layers', () => {
+  test('removes a layer and rebuilds without a button press', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const rows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
+    const stats = page.getByText(/triangles/);
+
+    await generate(page);
+    await expect(rows).toHaveCount(4);
+    await expect(stats).toContainText('3.20 mm');
+
+    await page.locator('[aria-label^="Delete layer"]').nth(1).click();
+
+    // A deletion is a layer change, so it rebuilds like a merge does.
+    await expect(rows).toHaveCount(3);
+    await expect(stats).toContainText('2.80 mm');
+    await expect(page.getByText(/regenerate to apply/i)).toHaveCount(0);
+  });
+
+  test('restores deleted layers on reset', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const rows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
+
+    await page.locator('[aria-label^="Delete layer"]').first().click();
+    await expect(rows).toHaveCount(3);
+
+    // Reset is the one way back to the artwork as uploaded.
+    await page.getByRole('button', { name: 'Reset' }).click();
+    await expect(rows).toHaveCount(4);
+  });
+
+  test('refuses to delete the last remaining layer', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const rows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
+
+    for (let i = 0; i < 3; i++) {
+      await page.locator('[aria-label^="Delete layer"]').first().click();
+    }
+
+    await expect(rows).toHaveCount(1);
+    await expect(page.locator('[aria-label^="Delete layer"]').first()).toBeDisabled();
   });
 });

@@ -11,6 +11,8 @@ export interface LayerConfig {
   originalColor: string;
   /** Colour to print this layer in. Layers sharing one become a single layer. */
   assignedColor: string;
+  /** Removed from the sign. Absent means kept, so older projects load unchanged. */
+  deleted?: boolean;
 }
 
 export interface ProjectConfig {

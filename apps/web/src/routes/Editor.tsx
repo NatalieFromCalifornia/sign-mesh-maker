@@ -86,6 +86,8 @@ export function Editor() {
   const [assigned, setAssigned] = useState<string[]>([]);
   /** Indices into the merged group list, for the merge action. */
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  /** Source-layer indices the user removed; excluded from every stage downstream. */
+  const [deleted, setDeleted] = useState<Set<number>>(new Set());
   const [cropping, setCropping] = useState(false);
   /** Assigned colour per source layer, for previewing the uncropped artwork. */
   const assignedColors = useMemo(
@@ -124,10 +126,16 @@ export function Editor() {
    * so assigning two layers the same color genuinely produces one printed
    * layer rather than two at the same height.
    */
-  const groups = useMemo(
-    () => (parsed ? groupLayersByColor(parsed.layers, assigned) : []),
-    [parsed, assigned],
-  );
+  const groups = useMemo(() => {
+    if (!parsed) return [];
+    // Deleted layers are dropped before grouping, so a merge of survivors
+    // still produces one contiguous set of rows.
+    const kept = parsed.layers.filter((_, i) => !deleted.has(i));
+    const keptAssigned = parsed.layers
+      .map((layer, i) => assigned[i] ?? layer.color)
+      .filter((_, i) => !deleted.has(i));
+    return groupLayersByColor(kept, keptAssigned);
+  }, [parsed, assigned, deleted]);
 
   const effective = useMemo(
     () => (parsed ? { ...parsed, layers: groups } : null),
@@ -152,6 +160,7 @@ export function Editor() {
     setHovered(null);
     setAssigned([]);
     setSelected(new Set());
+    setDeleted(new Set());
     setSvgText(null);
     setConfig((current) => ({ ...current, crop: FULL_CROP }));
     setCropping(false);
@@ -188,6 +197,7 @@ export function Editor() {
 
         setAssigned([]);
         setSelected(new Set());
+        setDeleted(new Set());
 
         const text = await file.text();
         setParsed(parseSvgLayers(text));
@@ -239,20 +249,48 @@ export function Editor() {
     });
   }, [effective, config]);
 
+  /**
+   * Source-layer indices behind a merged group.
+   *
+   * Grouping runs over the surviving layers, so a group's sourceIndices are
+   * positions in that filtered list — writing an assignment at those positions
+   * directly would recolour the wrong layers once anything is deleted.
+   */
+  const sourceIndicesOf = useCallback(
+    (groupIndex: number): number[] => {
+      if (!parsed) return [];
+      const keptToSource = parsed.layers
+        .map((_, i) => i)
+        .filter((i) => !deleted.has(i));
+      return (groups[groupIndex]?.sourceIndices ?? []).map((i) => keptToSource[i]);
+    },
+    [parsed, groups, deleted],
+  );
+
   /** Writes an assignment for every source layer folded into group `groupIndex`. */
   const assignToGroup = useCallback(
     (groupIndex: number, color: string) => {
       if (!parsed) return;
       setAssigned((current) => {
         const next = parsed.layers.map((layer, i) => current[i] ?? layer.color);
-        for (const source of groups[groupIndex]?.sourceIndices ?? []) {
-          next[source] = color.toLowerCase();
-        }
+        for (const source of sourceIndicesOf(groupIndex)) next[source] = color.toLowerCase();
         return next;
       });
       setStale(true);
     },
-    [parsed, groups],
+    [parsed, sourceIndicesOf],
+  );
+
+  const deleteGroup = useCallback(
+    (groupIndex: number) => {
+      const sources = sourceIndicesOf(groupIndex);
+      if (sources.length === 0) return;
+      setDeleted((current) => new Set([...current, ...sources]));
+      setSelected(new Set());
+      setHovered(null);
+      setStale(true);
+    },
+    [sourceIndicesOf],
   );
 
   const recolor = useCallback(
@@ -282,17 +320,20 @@ export function Editor() {
     setAssigned(() => {
       const next = parsed.layers.map((layer, i) => assigned[i] ?? layer.color);
       for (const groupIndex of indices) {
-        for (const source of groups[groupIndex].sourceIndices) next[source] = target;
+        for (const source of sourceIndicesOf(groupIndex)) next[source] = target;
       }
       return next;
     });
     setSelected(new Set());
     setStale(true);
-  }, [parsed, selected, groups, assigned]);
+  }, [parsed, selected, groups, assigned, sourceIndicesOf]);
 
   const resetColors = useCallback(() => {
     setAssigned([]);
     setSelected(new Set());
+    // Reset restores deleted layers too: it is the one way back to the artwork
+    // as uploaded, and leaving deletions behind would make that a lie.
+    setDeleted(new Set());
     setStale(true);
   }, []);
 
@@ -331,7 +372,7 @@ export function Editor() {
     // already covers that case; building here too would do the work twice.
     if (autoBuild) return;
     if (groupRef.current) generateRef.current();
-  }, [assigned, autoBuild]);
+  }, [assigned, deleted, autoBuild]);
 
   /*
    * Open a saved project from ?project=<id>.
@@ -392,6 +433,17 @@ export function Editor() {
           project.config.layers.map((layer) => [layer.originalColor, layer.assignedColor]),
         );
         setAssigned(restored.layers.map((layer) => byOriginal.get(layer.color) ?? layer.color));
+
+        const removedColors = new Set(
+          project.config.layers.filter((l) => l.deleted).map((l) => l.originalColor),
+        );
+        setDeleted(
+          new Set(
+            restored.layers
+              .map((layer, i) => (removedColors.has(layer.color) ? i : -1))
+              .filter((i) => i >= 0),
+          ),
+        );
         setSelected(new Set());
         setStats(null);
         setStale(false);
@@ -441,6 +493,7 @@ export function Editor() {
           layers: parsed.layers.map((layer, i) => ({
             originalColor: layer.color,
             assignedColor: colors[i],
+            ...(deleted.has(i) ? { deleted: true } : {}),
           })),
         },
       });
@@ -459,7 +512,7 @@ export function Editor() {
     } finally {
       setSaving(false);
     }
-  }, [parsed, svgText, user, assigned, projectId, projectName, config, setSearchParams]);
+  }, [parsed, svgText, user, assigned, deleted, projectId, projectName, config, setSearchParams]);
 
   const update = useCallback((patch: Partial<MeshConfig>) => {
     setConfig((current) => ({ ...current, ...patch }));
@@ -646,7 +699,7 @@ export function Editor() {
 
             <Panel
               title={`Layers · ${layers.length}`}
-              description="Lowest first. Recolor a layer, or select two or more to merge."
+              description="Lowest first. Recolor, delete, or select two or more to merge."
               actions={
                 <div className="flex shrink-0 gap-2">
                   <Button
@@ -657,7 +710,7 @@ export function Editor() {
                   >
                     Merge
                   </Button>
-                  {assigned.length > 0 && (
+                  {(assigned.length > 0 || deleted.size > 0) && (
                     <Button size="sm" variant="ghost" onClick={resetColors}>
                       Reset
                     </Button>
@@ -722,6 +775,29 @@ export function Editor() {
                       <span className="shrink-0 font-mono text-xs tabular-nums text-chalk">
                         {layer.heightMm.toFixed(2)} mm
                       </span>
+
+                      <button
+                        type="button"
+                        aria-label={`Delete layer ${layer.color}`}
+                        title="Remove this layer from the sign"
+                        // Deleting the last layer would leave nothing to print.
+                        disabled={layers.length <= 1}
+                        onClick={() => deleteGroup(i)}
+                        className={cn(
+                          'shrink-0 rounded-[2px] p-1 text-graphite transition-colors',
+                          'hover:bg-danger/10 hover:text-danger',
+                          'disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-graphite',
+                        )}
+                      >
+                        <svg viewBox="0 0 12 12" className="size-3" aria-hidden="true">
+                          <path
+                            d="M2 2l8 8M10 2l-8 8"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                          />
+                        </svg>
+                      </button>
                     </li>
                   );
                 })}
@@ -747,7 +823,7 @@ export function Editor() {
                 Download 3MF
               </Button>
               <Button
-                variant="ghost"
+                variant="secondary"
                 disabled={!group}
                 onClick={() => group && downloadStl(group, stlFilename(fileName ?? 'sign'))}
               >

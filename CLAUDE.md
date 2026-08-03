@@ -10,6 +10,7 @@ Web app that converts an SVG into a multi-color 3D-printable STL sign.
 - **Build spec:** `docs/requirements.md` — full product/design spec, data model, algorithms, and the suggested implementation phases (§10). Follow that phase order unless told otherwise.
 - **Setup status:** `docs/manual-setup.md` — all manual (browser/console) setup steps are complete as of the checklist in that file. Don't re-suggest doing them; if something in the app doesn't work, check whether it's actually one of the boxes there before assuming setup is incomplete.
 - **Vector input only. Raster support was removed deliberately, not left unbuilt.** PNG/JPG/WebP upload, k-means quantization and `imagetracerjs` all existed and were deleted by product decision: traced output was too noisy for printable signs. Do not reintroduce raster input, tracing, or a color-count control without being asked. This also removes any need for the OpenCV.js inpainting in §10 phase 5 and §9.3 — that step only ever applied to raster art.
+- **3MF colour comes from filament slots, not the mesh.** Orca ignores core `basematerials` — a file with only those opens as one uniform grey solid. `Metadata/model_settings.config` binds each part to a 1-based `extruder`, and its `part` ids must equal the `<component objectid>`s in `3D/3dmodel.model` or the assignments attach to nothing. A sign with more colours than the printer has slots needs layers merged or deleted down first.
 - **Exports are in printer space: +Z is thickness and the sign rests on z=0.** `buildMesh` produces that; the viewer applies the Y-up tilt itself via a pivot. Never rotate the group in `buildMesh`, and never read `matrixWorld` in an exporter — the group is parented under that pivot, so world matrices carry the tilt and the sign arrives in a slicer standing on its edge. `partsFromGroup` inverts the group's own world matrix for exactly this reason, and both STL and 3MF go through it so they cannot disagree.
 - **Current state:** every §10 phase in scope is built — routing, Google auth, SVG upload, crop, per-layer recolouring and merging, stepped *and* flat mesh modes, the three.js preview, binary STL download, and project save/load. Only stretch goals remain (per-colour STL export, §5.7).
 - **Crop is stored as fractions of the artwork box**, not artwork units as §6 implies. The SVG is re-parsed on load, so any change to how bounds are derived would silently move a crop expressed absolutely.
@@ -89,7 +90,7 @@ The client pipeline. Dependencies are deliberately minimal — `konva`/`react-ko
 ```
 upload (SVG)                          fills grouped by colour, one layer each, document order
   → crop (optional)                   fractions of the artwork box; clipped before anything else
-  → layer config                      recolour, merge (same colour = one layer, §5.4)
+  → layer config                      recolour, delete, merge (same colour = one layer, §5.4)
   → dimensions                        mm width, base thickness, layer step
   → generate mesh (button)            shapes → earcut → three.js extrusion per layer
        flat mode: layers cut to be disjoint, inset by gap/2, seated on a unioned slab

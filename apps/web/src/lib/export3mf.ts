@@ -11,13 +11,16 @@ import { strToU8, zipSync } from 'fflate';
  * one coordinate system inside one file, so there is no import ritual to get
  * wrong, and it carries the colours.
  *
- * What is written here is core 3MF (the 2015/02 spec namespace): one object per
- * colour, assembled through <components> so they stay a single build item, with
- * a <basematerials> entry per colour. Assigning parts to specific filament
- * slots additionally needs vendor metadata — Orca and Bambu read
- * `Metadata/model_settings.config`, PrusaSlicer reads
- * `Metadata/Slic3r_PE_model.config` — which is deliberately not guessed at
- * here; geometry, alignment and colour are what the core spec can guarantee.
+ * Core 3MF (the 2015/02 namespace) carries the geometry: one object per colour,
+ * assembled through <components> so they stay a single build item, with a
+ * <basematerials> entry per colour.
+ *
+ * That alone opens correctly but arrives uniformly grey, because Orca ignores
+ * core basematerials. Colour in a slicer comes from the filament, not the mesh,
+ * so what it actually needs is each part bound to a slot — which lives in
+ * `Metadata/model_settings.config` as an `extruder` key, 1-based. That file is
+ * written too, and being additive it leaves the package readable by tools that
+ * ignore it.
  */
 
 const MODEL_NS = 'http://schemas.microsoft.com/3dmanufacturing/core/2015/02';
@@ -27,6 +30,7 @@ const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+  <Default Extension="config" ContentType="text/xml"/>
 </Types>`;
 
 const RELS = `<?xml version="1.0" encoding="UTF-8"?>
@@ -191,12 +195,42 @@ ${components}
 </model>`;
 }
 
+/**
+ * Orca/Bambu part settings: binds each part to a filament slot.
+ *
+ * The `object` id is the assembly, and each `part` id is one of its components
+ * in 3dmodel.model, so the two files line up by construction. Extruders are
+ * 1-based and assigned in layer order; a sign with more colours than the
+ * printer has slots needs layers merged down first, which the editor does.
+ */
+export function buildModelSettings(parts: ExportPart[]): string {
+  const assemblyId = parts.length + 2;
+
+  const entries = parts
+    .map(
+      (part, index) => `    <part id="${index + 2}" subtype="normal_part">
+      <metadata key="name" value="${escapeXml(part.name)}"/>
+      <metadata key="extruder" value="${index + 1}"/>
+    </part>`,
+    )
+    .join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="${assemblyId}">
+    <metadata key="name" value="Sign"/>
+${entries}
+  </object>
+</config>`;
+}
+
 export function build3mf(parts: ExportPart[]): Uint8Array {
   return zipSync(
     {
       '[Content_Types].xml': strToU8(CONTENT_TYPES),
       '_rels/.rels': strToU8(RELS),
       '3D/3dmodel.model': strToU8(buildModelXml(parts)),
+      'Metadata/model_settings.config': strToU8(buildModelSettings(parts)),
     },
     // Deflate: the XML is highly repetitive and compresses to a fraction.
     { level: 6 },

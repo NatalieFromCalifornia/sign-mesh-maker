@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { unzipSync, strFromU8 } from 'fflate';
-import { build3mf, buildModelXml, threeMfFilename, type ExportPart } from './export3mf';
+import {
+  build3mf,
+  buildModelSettings,
+  buildModelXml,
+  threeMfFilename,
+  type ExportPart,
+} from './export3mf';
 
 /** One unit triangle, offset so parts can be told apart. */
 function part(color: string, name: string, shift = 0): ExportPart {
@@ -23,6 +29,7 @@ describe('build3mf', () => {
 
     expect(Object.keys(files).sort()).toEqual([
       '3D/3dmodel.model',
+      'Metadata/model_settings.config',
       '[Content_Types].xml',
       '_rels/.rels',
     ]);
@@ -131,5 +138,48 @@ describe('threeMfFilename', () => {
 
   it('appends when there is no stl extension', () => {
     expect(threeMfFilename('sign')).toBe('sign.3mf');
+  });
+});
+
+describe('buildModelSettings', () => {
+  /*
+   * Core basematerials alone opened as one uniform grey solid: a slicer takes
+   * colour from the filament, not the mesh, so each part has to name a slot.
+   */
+  it('binds each part to its own 1-based filament slot', () => {
+    const config = buildModelSettings(PARTS);
+    expect(config).toContain('<metadata key="extruder" value="1"/>');
+    expect(config).toContain('<metadata key="extruder" value="2"/>');
+    expect(config.match(/subtype="normal_part"/g)).toHaveLength(2);
+  });
+
+  it('uses part ids that match the components in the model', () => {
+    // The two files line up by construction, or the assignments attach to
+    // nothing.
+    const model = buildModelXml(PARTS);
+    const config = buildModelSettings(PARTS);
+
+    const componentIds = [...model.matchAll(/<component objectid="(\d+)"\/>/g)].map((m) => m[1]);
+    const partIds = [...config.matchAll(/<part id="(\d+)"/g)].map((m) => m[1]);
+    expect(partIds).toEqual(componentIds);
+  });
+
+  it('nests the parts under the assembly object', () => {
+    const model = buildModelXml(PARTS);
+    const config = buildModelSettings(PARTS);
+
+    const assemblyId = model.match(/<item objectid="(\d+)"\/>/)![1];
+    expect(config).toContain(`<object id="${assemblyId}">`);
+  });
+
+  it('escapes part names', () => {
+    expect(buildModelSettings([{ ...part('#ffffff', 'x'), name: 'a & b' }])).toContain('a &amp; b');
+  });
+});
+
+describe('content types', () => {
+  it('declares the config extension so the package stays valid', () => {
+    const files = unzipSync(build3mf(PARTS));
+    expect(strFromU8(files['[Content_Types].xml'])).toContain('Extension="config"');
   });
 });
