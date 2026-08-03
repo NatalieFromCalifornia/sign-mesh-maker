@@ -16,6 +16,7 @@ import {
   type ParsedSvg,
 } from '../lib/svgLayers';
 import {
+  DEFAULT_FLAT_GAP_MM,
   buildMesh,
   disposeGroup,
   layerAssignments,
@@ -41,6 +42,8 @@ const DEFAULT_CONFIG: MeshConfig = {
    * on whole printed layers.
    */
   layerMm: 0.4,
+  flatMode: false,
+  flatGapMm: DEFAULT_FLAT_GAP_MM,
 };
 
 export function Editor() {
@@ -53,6 +56,8 @@ export function Editor() {
   const [projectName, setProjectName] = useState('');
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  /** Set after opening a project, so its mesh builds without a button press. */
+  const [autoBuild, setAutoBuild] = useState(false);
   const [parsed, setParsed] = useState<ParsedSvg | null>(null);
   const [config, setConfig] = useState<MeshConfig>(DEFAULT_CONFIG);
   const [group, setGroup] = useState<THREE.Group | null>(null);
@@ -285,14 +290,23 @@ export function Editor() {
     generateRef.current = generate;
   }, [generate]);
 
+  useEffect(() => {
+    if (!autoBuild || !effective) return;
+    setAutoBuild(false);
+    generateRef.current();
+  }, [autoBuild, effective]);
+
   const didMountAssigned = useRef(false);
   useEffect(() => {
     if (!didMountAssigned.current) {
       didMountAssigned.current = true;
       return;
     }
+    // Opening a project also replaces `assigned`. The autoBuild effect above
+    // already covers that case; building here too would do the work twice.
+    if (autoBuild) return;
     if (groupRef.current) generateRef.current();
-  }, [assigned]);
+  }, [assigned, autoBuild]);
 
   /*
    * Open a saved project from ?project=<id>.
@@ -336,6 +350,10 @@ export function Editor() {
           widthMm: project.config.widthMm,
           baseMm: project.config.baseMm,
           layerMm: project.config.layerMm,
+          // Absent on projects saved before flat mode shipped, which were
+          // stepped by definition.
+          flatMode: project.config.flatMode ?? false,
+          flatGapMm: project.config.flatGapMm ?? DEFAULT_FLAT_GAP_MM,
         });
         /*
          * Assignments are matched by original colour, not by index: a saved
@@ -351,6 +369,13 @@ export function Editor() {
         setStats(null);
         setStale(false);
         setError(null);
+        /*
+         * A reopened project arrives with a configuration its owner already
+         * settled on, so showing an empty viewport and asking them to press
+         * Generate is busywork. §5.6 exists to avoid rebuilding on every
+         * config fiddle, which this is not.
+         */
+        setAutoBuild(true);
       } catch (cause) {
         if (!cancelled) setError(describeFirestoreError(cause, 'Opening that project'));
         console.error('Project load failed', cause);
@@ -383,6 +408,8 @@ export function Editor() {
           widthMm: config.widthMm,
           baseMm: config.baseMm,
           layerMm: config.layerMm,
+          flatMode: config.flatMode ?? false,
+          flatGapMm: config.flatGapMm ?? DEFAULT_FLAT_GAP_MM,
           layers: parsed.layers.map((layer, i) => ({
             originalColor: layer.color,
             assignedColor: colors[i],
@@ -466,15 +493,51 @@ export function Editor() {
                   onChange={(baseMm) => update({ baseMm })}
                 />
                 <NumberField
-                  label="Layer step"
+                  label={config.flatMode ? 'Colour thickness' : 'Layer step'}
                   unit="mm"
                   min={0.1}
                   max={20}
                   step={0.1}
-                  hint="Added per layer above the base."
+                  hint={
+                    config.flatMode
+                      ? 'Height of every colour above the base.'
+                      : 'Added per layer above the base.'
+                  }
                   value={config.layerMm}
                   onChange={(layerMm) => update({ layerMm })}
                 />
+
+                <div className="flex flex-col gap-3 border-t border-rule pt-4">
+                  <label className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={config.flatMode ?? false}
+                      onChange={(e) => update({ flatMode: e.target.checked })}
+                      className="mt-0.5 size-3.5 shrink-0 accent-signal"
+                    />
+                    <span>
+                      <span className="block font-mono text-[11px] uppercase tracking-[0.14em] text-chalk">
+                        Flat mesh
+                      </span>
+                      <span className="mt-1 block text-sm leading-relaxed text-graphite">
+                        One height for every colour, separated by a channel instead of steps.
+                      </span>
+                    </span>
+                  </label>
+
+                  {config.flatMode && (
+                    <NumberField
+                      label="Channel"
+                      unit="mm"
+                      min={0.02}
+                      max={2}
+                      step={0.02}
+                      hint="Gap milled between touching colours."
+                      value={config.flatGapMm ?? DEFAULT_FLAT_GAP_MM}
+                      onChange={(flatGapMm) => update({ flatGapMm })}
+                    />
+                  )}
+                </div>
               </div>
             </Panel>
 

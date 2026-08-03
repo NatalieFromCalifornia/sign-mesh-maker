@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { ParsedSvg } from './svgLayers';
+import { insetShapes, subtractShapes, unionShapes } from './offset';
 
 export interface MeshConfig {
   /** Finished width of the sign; height follows from the artwork's aspect. */
@@ -8,7 +9,17 @@ export interface MeshConfig {
   baseMm: number;
   /** Step added per layer above the lowest (requirements §5.3). */
   layerMm: number;
+  /**
+   * Flat mesh mode (requirements §5.5). Every colour sits at one height on a
+   * solid backing, separated by milled channels instead of height steps.
+   */
+  flatMode?: boolean;
+  /** Width of the channel between adjacent colours, in mm. */
+  flatGapMm?: number;
 }
+
+/** Default channel width from requirements §5.5. */
+export const DEFAULT_FLAT_GAP_MM = 0.08;
 
 export interface LayerAssignment {
   color: string;
@@ -26,6 +37,9 @@ export interface LayerAssignment {
  * is identical.
  */
 export function layerHeight(index: number, config: MeshConfig): number {
+  // Flat mode puts every colour on one plane; §5.5 defines that as the base
+  // plus a single step, whatever the layer's position in the stack.
+  if (config.flatMode) return config.baseMm + config.layerMm;
   return config.baseMm + index * config.layerMm;
 }
 
@@ -53,28 +67,83 @@ export function buildMesh(parsed: ParsedSvg, config: MeshConfig): BuiltMesh {
   const group = new THREE.Group();
   let triangles = 0;
 
-  parsed.layers.forEach((layer, index) => {
-    const depth = layerHeight(index, config);
+  const addMesh = (shapes: THREE.Shape[], depth: number, color: string, zOffset = 0) => {
+    if (shapes.length === 0) return;
 
-    const geometry = new THREE.ExtrudeGeometry(layer.shapes, {
-      depth,
-      bevelEnabled: false,
-    });
-
-    // Artwork is scaled to millimetres; depth is already in millimetres.
+    const geometry = new THREE.ExtrudeGeometry(shapes, { depth, bevelEnabled: false });
     geometry.scale(scale, scale, 1);
+    if (zOffset !== 0) geometry.translate(0, 0, zOffset);
 
-    const material = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(layer.color),
-      roughness: 0.62,
-      metalness: 0.0,
-    });
-
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = layer.color;
+    const mesh = new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(color),
+        roughness: 0.62,
+        metalness: 0.0,
+      }),
+    );
+    mesh.name = color;
     group.add(mesh);
-
     triangles += geometry.getAttribute('position').count / 3;
+  };
+
+  /*
+   * Flat mode needs a solid backing under everything (§5.5).
+   *
+   * Each colour is inset to open a channel to its neighbours, so without a slab
+   * beneath, those channels would be gaps straight through to the print bed
+   * rather than grooves in a sign. The slab carries the lowest layer's colour,
+   * which is the background the artwork was drawn on.
+   */
+  if (config.flatMode && parsed.layers.length > 0) {
+    addMesh(
+      unionShapes(parsed.layers.flatMap((layer) => layer.shapes)),
+      config.baseMm,
+      parsed.layers[0].color,
+    );
+  }
+
+  /*
+   * The inset is half the gap, applied to both neighbours, so the finished
+   * channel between two colours is the full gap. Shapes are in SVG units, so
+   * the millimetre gap converts back through the same scale.
+   */
+  const insetUnits =
+    config.flatMode && scale > 0 ? (config.flatGapMm ?? DEFAULT_FLAT_GAP_MM) / 2 / scale : 0;
+
+  parsed.layers.forEach((layer, index) => {
+    /*
+     * In flat mode, cut away anything a later layer covers before insetting.
+     *
+     * Layers are painted in document order, so a background reaches under
+     * everything drawn on it. At a single height that leaves two colours
+     * sharing one top face — z-fighting on screen, and two materials claiming
+     * one volume in the STL. Stepped mode does not need this: the heights
+     * differ, so the upper layer simply sits above.
+     */
+    const exclusive =
+      config.flatMode && index < parsed.layers.length - 1
+        ? subtractShapes(
+            layer.shapes,
+            unionShapes(parsed.layers.slice(index + 1).flatMap((l) => l.shapes)),
+          )
+        : layer.shapes;
+
+    const shapes = insetUnits > 0 ? insetShapes(exclusive, insetUnits) : exclusive;
+
+    if (config.flatMode) {
+      /*
+       * Sit the colour on the slab rather than running it down to the bed.
+       * Extruding from zero would put the tile and the slab in the same volume
+       * for the base's whole thickness, and the coplanar faces z-fight into
+       * visible streaks across the preview. It is also duplicate solid for a
+       * slicer to reconcile.
+       */
+      addMesh(shapes, config.layerMm, layer.color, config.baseMm);
+      return;
+    }
+
+    addMesh(shapes, layerHeight(index, config), layer.color);
   });
 
   // Center on the bed so orbiting feels anchored.

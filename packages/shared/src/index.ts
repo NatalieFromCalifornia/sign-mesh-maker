@@ -21,12 +21,18 @@ export interface ProjectConfig {
   /** Step added per layer above the lowest (requirements §5.3). */
   layerMm: number;
   layers: LayerConfig[];
+  /** Flat mesh mode: one height for every colour, channels instead of steps (§5.5). */
+  flatMode?: boolean;
+  /** Channel width between touching colours, in mm (§5.5). */
+  flatGapMm?: number;
 
   /*
-   * Not stored, because not built: cropRect (§5.3), flatMode and flatGapMm
-   * (§5.5). Height is not cached either — §6 suggests caching it, but it is
-   * derived from the artwork's aspect, and a cached copy can only drift out of
-   * agreement with the SVG it came from.
+   * Not stored, because not built: cropRect (§5.3). Height is not cached
+   * either — §6 suggests caching it, but it derives from the artwork's aspect,
+   * and a cached copy can only drift out of agreement with the SVG.
+   *
+   * flatMode and flatGapMm are optional so projects saved before flat mode
+   * existed still load; absent means off, which is what they were built with.
    */
 }
 

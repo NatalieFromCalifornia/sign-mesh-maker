@@ -11,6 +11,12 @@ async function upload(page: Page, name: string) {
   await expect(page.getByRole('button', { name: /generate mesh/i })).toBeVisible();
 }
 
+/** Layer checkboxes by label — positional lookup breaks when a control is added above. */
+async function selectLayers(page: Page, ...indices: number[]) {
+  const boxes = page.locator('input[aria-label^="Select layer"]');
+  for (const index of indices) await boxes.nth(index).check();
+}
+
 async function generate(page: Page) {
   await page.getByRole('button', { name: /generate mesh/i }).click();
   await expect(page.getByText(/triangles/)).toBeVisible({ timeout: 30_000 });
@@ -182,8 +188,7 @@ test('merges selected layers into one at a shared height', async ({ page }) => {
   const rows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
   await expect(rows).toHaveCount(4);
 
-  await page.locator('input[type=checkbox]').nth(0).check();
-  await page.locator('input[type=checkbox]').nth(1).check();
+  await selectLayers(page, 0, 1);
   await page.getByRole('button', { name: 'Merge' }).click();
 
   // §5.4: layers sharing a colour become one printed layer, not two at one height.
@@ -202,8 +207,7 @@ test('merging rebuilds the mesh without pressing the button', async ({ page }) =
   // Four layers on a 2mm base at 0.4mm steps top out at 3.20mm.
   await expect(stats).toContainText('3.20 mm');
 
-  await page.locator('input[type=checkbox]').nth(0).check();
-  await page.locator('input[type=checkbox]').nth(1).check();
+  await selectLayers(page, 0, 1);
   await page.getByRole('button', { name: 'Merge' }).click();
 
   // No Regenerate click: a merge changes which layers exist, so leaving the old
@@ -277,5 +281,66 @@ test.describe('saving projects', () => {
   test('sends a signed-out visitor from the projects list to login', async ({ page }) => {
     await page.goto('/projects');
     await expect(page).toHaveURL(/\/login/);
+  });
+});
+
+test.describe('flat mode (§5.5)', () => {
+  const enableFlat = (page: Page) =>
+    page.locator('label:has-text("Flat mesh") input[type=checkbox]').check();
+
+  test('puts every layer at one height', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const rows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
+
+    // Stepped: 2.00 / 2.40 / 2.80 / 3.20.
+    await expect(rows.first()).toContainText('2.00 mm');
+    await expect(rows.last()).toContainText('3.20 mm');
+
+    await enableFlat(page);
+
+    const heights = await rows.evaluateAll((els) =>
+      els.map((e) => e.textContent?.match(/[\d.]+ mm/)?.[0]),
+    );
+    expect(new Set(heights).size).toBe(1);
+    expect(heights[0]).toBe('2.40 mm');
+  });
+
+  test('reveals the channel control and relabels the step field', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await expect(page.getByRole('spinbutton', { name: 'Channel' })).toHaveCount(0);
+
+    await enableFlat(page);
+    await expect(page.getByRole('spinbutton', { name: 'Channel' })).toHaveValue('0.08');
+    // "Layer step" no longer describes a stack that steps.
+    await expect(page.getByRole('spinbutton', { name: 'Colour thickness' })).toBeVisible();
+  });
+
+  test('exports a flat STL grooved down to the base, not through it', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await enableFlat(page);
+    await generate(page);
+    await expect(page.getByText(/2\.40 mm/).first()).toBeVisible();
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: /download stl/i }).click(),
+    ]);
+    const buffer = readFileSync(await download.path());
+    const triangles = buffer.readUInt32LE(80);
+    expect(buffer.length).toBe(84 + triangles * 50);
+
+    const heights = new Set<string>();
+    for (let i = 0; i < triangles; i++) {
+      const offset = 84 + i * 50 + 12;
+      for (let v = 0; v < 3; v++) heights.add(buffer.readFloatLE(offset + v * 12 + 4).toFixed(2));
+    }
+
+    /*
+     * Three levels, and the middle one matters: the base at 2.00 proves the
+     * channels are grooves in a solid slab rather than gaps to the print bed.
+     */
+    expect([...heights].map(Number).sort((a, b) => a - b)).toEqual(
+      expect.arrayContaining([0, 2, 2.4]),
+    );
   });
 });

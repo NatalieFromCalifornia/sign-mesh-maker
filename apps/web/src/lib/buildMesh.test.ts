@@ -76,3 +76,55 @@ describe('buildMesh', () => {
     }
   });
 });
+
+describe('flat mode (§5.5)', () => {
+  const FLAT: MeshConfig = { ...CONFIG, flatMode: true, flatGapMm: 0.4 };
+
+  it('puts every layer at one height instead of stepping', () => {
+    expect(layerHeight(0, FLAT)).toBeCloseTo(2.4, 6);
+    expect(layerHeight(3, FLAT)).toBeCloseTo(2.4, 6);
+    expect(layerHeight(9, FLAT)).toBeCloseTo(2.4, 6);
+  });
+
+  it('reports the same height for every layer in the sidebar', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const heights = layerAssignments(parsed, FLAT).map((l) => l.heightMm);
+    expect(new Set(heights).size).toBe(1);
+  });
+
+  it('is no taller than one step above the base', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const stepped = buildMesh(parsed, CONFIG).sizeMm.depth;
+    const flat = buildMesh(parsed, FLAT).sizeMm.depth;
+
+    expect(flat).toBeCloseTo(CONFIG.baseMm + CONFIG.layerMm, 5);
+    expect(flat).toBeLessThan(stepped);
+  });
+
+  it('adds a backing slab so channels are grooves, not holes to the bed', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const stepped = buildMesh(parsed, CONFIG);
+    const flat = buildMesh(parsed, FLAT);
+
+    // One extra mesh: the slab beneath the inset colours.
+    expect(flat.group.children.length).toBe(stepped.group.children.length + 1);
+  });
+
+  it('still sits on the bed', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const { group } = buildMesh(parsed, FLAT);
+    group.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(group);
+    expect(box.min.y).toBeCloseTo(0, 3);
+  });
+
+  it('insets colours so they no longer touch', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const wide: MeshConfig = { ...FLAT, flatGapMm: 4 };
+
+    // A wide channel must remove noticeably more geometry than a hairline one.
+    const hairline = buildMesh(parsed, { ...FLAT, flatGapMm: 0.02 }).triangles;
+    expect(buildMesh(parsed, wide).triangles).toBeLessThanOrEqual(hairline);
+  });
+});
