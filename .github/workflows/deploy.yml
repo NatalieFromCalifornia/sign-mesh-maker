@@ -1,11 +1,17 @@
-name: Deploy Firestore rules
+name: Deploy Firestore rules and indexes
 
-# Frontend build + deploy is handled natively by Cloudflare's own
-# Git-connected Workers Build (the "Connect to Git" flow in the Cloudflare
-# dashboard) — it builds and runs `npx wrangler deploy` on every push
-# automatically, reading wrangler.jsonc for the assets directory. No GitHub
-# Action is needed for that anymore, so this workflow only handles the one
-# piece Cloudflare doesn't: keeping Firestore rules/indexes in sync.
+# Frontend build + deploy is handled natively by Cloudflare's own Git-connected
+# Workers Build, which reads wrangler.jsonc on every push. This workflow only
+# handles the one piece Cloudflare doesn't: keeping Firestore rules and indexes
+# in sync.
+#
+# The path filter below is a trap worth understanding. These files changed in the
+# first commit and not since, so once that commit's run failed the workflow never
+# ran again — and nothing noticed, because nothing depended on the index until
+# the projects list shipped many commits later. It then failed for every user
+# with "could not be loaded", and the missing index took a manual
+# `firebase firestore:indexes` to find. Hence workflow_dispatch: deploying must
+# not require finding a file to touch.
 
 on:
   push:
@@ -13,9 +19,11 @@ on:
     paths:
       - "firestore.rules"
       - "firestore.indexes.json"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
 
 jobs:
-  deploy-firestore-rules:
+  deploy-firestore:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,3 +31,7 @@ jobs:
         with:
           node-version: 20
       - run: npx firebase-tools deploy --only firestore --token "${{ secrets.FIREBASE_TOKEN }}" --project "${{ secrets.FIREBASE_PROJECT_ID }}"
+
+      # Print what actually landed, so a silent no-op is visible in the log.
+      - name: Show deployed indexes
+        run: npx firebase-tools firestore:indexes --token "${{ secrets.FIREBASE_TOKEN }}" --project "${{ secrets.FIREBASE_PROJECT_ID }}"

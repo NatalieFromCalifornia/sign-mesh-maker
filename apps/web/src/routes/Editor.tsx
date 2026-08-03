@@ -25,6 +25,7 @@ import { downloadStl, stlFilename } from '../lib/exportStl';
 import { renderThumbnail } from '../lib/thumbnail';
 import {
   ProjectTooLargeError,
+  describeFirestoreError,
   loadProject,
   saveProject,
 } from '../lib/projects';
@@ -351,7 +352,7 @@ export function Editor() {
         setStale(false);
         setError(null);
       } catch (cause) {
-        if (!cancelled) setError('That project could not be opened.');
+        if (!cancelled) setError(describeFirestoreError(cause, 'Opening that project'));
         console.error('Project load failed', cause);
       } finally {
         if (!cancelled) setBusy(false);
@@ -397,7 +398,7 @@ export function Editor() {
       setError(
         cause instanceof ProjectTooLargeError
           ? cause.message
-          : 'That project could not be saved. Please try again.',
+          : describeFirestoreError(cause, 'Saving that project'),
       );
       console.error('Project save failed', cause);
     } finally {

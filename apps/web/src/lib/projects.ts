@@ -33,6 +33,32 @@ export const SAFE_DOC_BUDGET = 900_000;
 export class ProjectTooLargeError extends Error {}
 export class NotSignedInError extends Error {}
 
+/**
+ * Turns a Firestore failure into something the reader can act on.
+ *
+ * A generic message here cost real time: the projects list failed for every
+ * user because the composite index had never been deployed, and Firestore says
+ * so precisely — `failed-precondition`, with a console URL that creates the
+ * index. Collapsing that into "could not be loaded" threw away the one detail
+ * that identified the problem.
+ */
+export function describeFirestoreError(cause: unknown, action: string): string {
+  const code = (cause as { code?: string } | undefined)?.code;
+
+  switch (code) {
+    case 'failed-precondition':
+      return `${action} needs a database index that is missing or still building. Deploy it with \`firebase deploy --only firestore\`, then retry.`;
+    case 'permission-denied':
+      return `${action} was refused by the database rules. Check that firestore.rules is deployed.`;
+    case 'unauthenticated':
+      return `${action} requires you to be signed in.`;
+    case 'unavailable':
+      return `${action} failed to reach the database. Check your connection and retry.`;
+    default:
+      return `${action} failed${code ? ` (${code})` : ''}. Please try again.`;
+  }
+}
+
 const encoder = new TextEncoder();
 
 /** Approximate stored size of the parts that can actually grow. */

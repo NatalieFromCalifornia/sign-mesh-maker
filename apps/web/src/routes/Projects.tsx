@@ -5,7 +5,7 @@ import { Button } from '../components/ui/Button';
 import { Panel } from '../components/ui/Panel';
 import { ElevationStack } from '../components/ElevationStack';
 import { useAuth } from '../auth/AuthProvider';
-import { deleteProject, listProjects, renameProject } from '../lib/projects';
+import { deleteProject, describeFirestoreError, listProjects, renameProject } from '../lib/projects';
 import { cn } from '../lib/cn';
 
 function relativeTime(ms: number): string {
@@ -38,7 +38,7 @@ export function Projects() {
       setProjects(await listProjects(user.uid));
       setError(null);
     } catch (cause) {
-      setError('Your projects could not be loaded.');
+      setError(describeFirestoreError(cause, 'Loading your projects'));
       console.error('Project list failed', cause);
     }
   }, [user]);
@@ -61,7 +61,7 @@ export function Projects() {
       try {
         await renameProject(id, name);
       } catch (cause) {
-        setError('That project could not be renamed.');
+        setError(describeFirestoreError(cause, 'Renaming that project'));
         console.error('Rename failed', cause);
         void refresh();
       }
@@ -79,7 +79,7 @@ export function Projects() {
         await deleteProject(project.id);
         setProjects((current) => current?.filter((p) => p.id !== project.id) ?? current);
       } catch (cause) {
-        setError('That project could not be deleted.');
+        setError(describeFirestoreError(cause, 'Deleting that project'));
         console.error('Delete failed', cause);
       } finally {
         setPending(null);

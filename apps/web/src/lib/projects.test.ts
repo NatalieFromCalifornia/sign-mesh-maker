@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ProjectConfig } from '@sign-mesh-maker/shared';
-import { SAFE_DOC_BUDGET, FIRESTORE_DOC_LIMIT, estimateProjectSize } from './projects';
+import {
+  SAFE_DOC_BUDGET,
+  FIRESTORE_DOC_LIMIT,
+  describeFirestoreError,
+  estimateProjectSize,
+} from './projects';
 
 const config: ProjectConfig = {
   widthMm: 120,
@@ -74,5 +79,44 @@ describe('document budget', () => {
       name: 'Too much',
     });
     expect(enormous).toBeGreaterThan(SAFE_DOC_BUDGET);
+  });
+});
+
+describe('describeFirestoreError', () => {
+  const err = (code: string) => Object.assign(new Error('boom'), { code });
+
+  /*
+   * The projects list failed for every user because the composite index had
+   * never been deployed. Firestore said exactly that — `failed-precondition` —
+   * and a generic message threw the detail away, so the cause had to be found
+   * by hand.
+   */
+  it('names the missing index and how to deploy it', () => {
+    const message = describeFirestoreError(err('failed-precondition'), 'Loading your projects');
+    expect(message).toMatch(/index/i);
+    expect(message).toContain('firebase deploy --only firestore');
+  });
+
+  it('distinguishes a rules rejection from a missing index', () => {
+    expect(describeFirestoreError(err('permission-denied'), 'Saving')).toMatch(/rules/i);
+    expect(describeFirestoreError(err('permission-denied'), 'Saving')).not.toMatch(/index/i);
+  });
+
+  it('names the action so the message says what failed', () => {
+    expect(describeFirestoreError(err('unavailable'), 'Deleting that project')).toContain(
+      'Deleting that project',
+    );
+  });
+
+  it('keeps the code visible for failures it does not recognise', () => {
+    expect(describeFirestoreError(err('resource-exhausted'), 'Saving')).toContain(
+      'resource-exhausted',
+    );
+  });
+
+  it('handles a non-Firestore throw without inventing a cause', () => {
+    const message = describeFirestoreError(new TypeError('undefined is not a function'), 'Saving');
+    expect(message).toContain('Saving');
+    expect(message).not.toMatch(/index|rules/i);
   });
 });
