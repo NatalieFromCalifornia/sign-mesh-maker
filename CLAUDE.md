@@ -10,6 +10,7 @@ Web app that converts an SVG into a multi-color 3D-printable STL sign.
 - **Build spec:** `docs/requirements.md` — full product/design spec, data model, algorithms, and the suggested implementation phases (§10). Follow that phase order unless told otherwise.
 - **Setup status:** `docs/manual-setup.md` — all manual (browser/console) setup steps are complete as of the checklist in that file. Don't re-suggest doing them; if something in the app doesn't work, check whether it's actually one of the boxes there before assuming setup is incomplete.
 - **Vector input only. Raster support was removed deliberately, not left unbuilt.** PNG/JPG/WebP upload, k-means quantization and `imagetracerjs` all existed and were deleted by product decision: traced output was too noisy for printable signs. Do not reintroduce raster input, tracing, or a color-count control without being asked. This also removes any need for the OpenCV.js inpainting in §10 phase 5 and §9.3 — that step only ever applied to raster art.
+- **Exports are in printer space: +Z is thickness and the sign rests on z=0.** `buildMesh` produces that; the viewer applies the Y-up tilt itself via a pivot. Never rotate the group in `buildMesh`, and never read `matrixWorld` in an exporter — the group is parented under that pivot, so world matrices carry the tilt and the sign arrives in a slicer standing on its edge. `partsFromGroup` inverts the group's own world matrix for exactly this reason, and both STL and 3MF go through it so they cannot disagree.
 - **Current state:** every §10 phase in scope is built — routing, Google auth, SVG upload, crop, per-layer recolouring and merging, stepped *and* flat mesh modes, the three.js preview, binary STL download, and project save/load. Only stretch goals remain (per-colour STL export, §5.7).
 - **Crop is stored as fractions of the artwork box**, not artwork units as §6 implies. The SVG is re-parsed on load, so any change to how bounds are derived would silently move a crop expressed absolutely.
 - **Flat mode uses polygon offsetting, not CSG.** §5.5 specifies insetting each region by half the gap, which `clipper-lib` does robustly — a region thinner than the channel vanishes instead of folding into a self-intersecting outline that triangulates into a broken solid. §9.4 floats `three-bvh-csg`/`manifold-3d` as an alternative; they aren't needed and aren't installed.
@@ -92,7 +93,7 @@ upload (SVG)                          fills grouped by colour, one layer each, d
   → dimensions                        mm width, base thickness, layer step
   → generate mesh (button)            shapes → earcut → three.js extrusion per layer
        flat mode: layers cut to be disjoint, inset by gap/2, seated on a unioned slab
-  → preview + STL export              three.js viewer; STLExporter, download only, never persisted
+  → preview + export                  three.js viewer; 3MF (colours, one build item) or plain STL
   → save                              Firestore doc: svg + JPEG thumbnail + config, all inline
 ```
 

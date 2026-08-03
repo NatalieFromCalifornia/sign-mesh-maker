@@ -22,3 +22,6 @@ blob-report/
 # licensing, and the repo is public.
 /deadpool_wolverine_poster.png
 /woman_in_bathtub.svg
+
+# Sample export produced for manual slicer testing.
+/sample-export.3mf

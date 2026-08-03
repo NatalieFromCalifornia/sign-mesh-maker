@@ -27,6 +27,7 @@ import {
   type MeshConfig,
 } from '../lib/buildMesh';
 import { downloadStl, stlFilename } from '../lib/exportStl';
+import { download3mf, threeMfFilename } from '../lib/export3mf';
 import { renderThumbnail } from '../lib/thumbnail';
 import {
   ProjectTooLargeError,
@@ -739,10 +740,23 @@ export function Editor() {
               <Button
                 variant="secondary"
                 disabled={!group}
+                onClick={() =>
+                  group && download3mf(group, threeMfFilename(stlFilename(fileName ?? 'sign')))
+                }
+              >
+                Download 3MF
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={!group}
                 onClick={() => group && downloadStl(group, stlFilename(fileName ?? 'sign'))}
               >
                 Download STL
               </Button>
+              <p className="text-sm leading-relaxed text-graphite">
+                3MF keeps the colours and the parts aligned. STL is a single
+                uncoloured solid, for tools that need it.
+              </p>
             </div>
 
             <Panel title={projectId ? 'Saved project' : 'Save project'}>

@@ -67,9 +67,9 @@ describe('buildMesh', () => {
     group.updateMatrixWorld(true);
 
     const box = new THREE.Box3().setFromObject(group);
-    // Group is rotated so extrusion runs along +Y; nothing may dip below z=0.
-    expect(box.min.y).toBeCloseTo(0, 3);
-    expect(box.max.y).toBeCloseTo(2.8, 3);
+    // Printer space: +Z is thickness and the sign rests on the bed at z=0.
+    expect(box.min.z).toBeCloseTo(0, 3);
+    expect(box.max.z).toBeCloseTo(2.8, 3);
   });
 
   it('produces geometry with no NaN positions', () => {
@@ -124,7 +124,7 @@ describe('flat mode (§5.5)', () => {
     group.updateMatrixWorld(true);
 
     const box = new THREE.Box3().setFromObject(group);
-    expect(box.min.y).toBeCloseTo(0, 3);
+    expect(box.min.z).toBeCloseTo(0, 3);
   });
 
   it('insets colours so they no longer touch', () => {
@@ -195,6 +195,6 @@ describe('crop (§5.3)', () => {
     const parsed = parseSvgLayers(HEX_SIGN_SVG);
     const { group } = buildMesh(parsed, HALF);
     group.updateMatrixWorld(true);
-    expect(new THREE.Box3().setFromObject(group).min.y).toBeCloseTo(0, 3);
+    expect(new THREE.Box3().setFromObject(group).min.z).toBeCloseTo(0, 3);
   });
 });

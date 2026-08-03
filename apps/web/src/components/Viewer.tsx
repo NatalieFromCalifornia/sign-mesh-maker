@@ -33,6 +33,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const contentRef = useRef<THREE.Group | null>(null);
+  /** Tilts printer space (Z up) into three.js view space (Y up). */
+  const pivotRef = useRef<THREE.Object3D | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
 
@@ -163,13 +165,24 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(
     const scene = sceneRef.current;
     if (!scene) return;
 
-    if (contentRef.current) {
-      scene.remove(contentRef.current);
+    if (pivotRef.current) {
+      scene.remove(pivotRef.current);
+      pivotRef.current = null;
       contentRef.current = null;
     }
     if (!group) return;
 
-    scene.add(group);
+    /*
+     * Presentation only. Meshes stay in printer coordinates so exports are
+     * oriented for a print bed; the tilt to three.js's Y-up world lives here.
+     */
+    const pivot = new THREE.Object3D();
+    pivot.rotation.x = -Math.PI / 2;
+    pivot.add(group);
+    scene.add(pivot);
+    pivot.updateMatrixWorld(true);
+
+    pivotRef.current = pivot;
     contentRef.current = group;
     frameCamera();
   }, [group, frameCamera]);

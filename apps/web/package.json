@@ -14,6 +14,7 @@
   "dependencies": {
     "@sign-mesh-maker/shared": "*",
     "clipper-lib": "^6.4.2",
+    "fflate": "^0.8.3",
     "firebase": "^10.13.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",

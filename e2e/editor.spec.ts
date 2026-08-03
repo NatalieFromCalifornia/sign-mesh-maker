@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { unzipSync, strFromU8 } from 'fflate';
 import path from 'node:path';
 
 // __dirname rather than import.meta: the repo root is CommonJS.
@@ -159,12 +160,14 @@ test('exports a well-formed binary STL that sits on the bed', async ({ page }) =
   // Binary STL is an 84-byte header plus 50 bytes per triangle, exactly.
   expect(buffer.length).toBe(84 + triangles * 50);
 
+  // Z is up: slicers expect it, and the preview's Y-up tilt is applied by the
+  // viewer rather than baked into exports.
   let minUp = Infinity;
   let maxUp = -Infinity;
   for (let i = 0; i < triangles; i++) {
     const offset = 84 + i * 50 + 12;
     for (let v = 0; v < 3; v++) {
-      const up = buffer.readFloatLE(offset + v * 12 + 4);
+      const up = buffer.readFloatLE(offset + v * 12 + 8);
       minUp = Math.min(minUp, up);
       maxUp = Math.max(maxUp, up);
     }
@@ -354,7 +357,8 @@ test.describe('flat mode (§5.5)', () => {
     const heights = new Set<string>();
     for (let i = 0; i < triangles; i++) {
       const offset = 84 + i * 50 + 12;
-      for (let v = 0; v < 3; v++) heights.add(buffer.readFloatLE(offset + v * 12 + 4).toFixed(2));
+      // Z, since exports are oriented for a print bed.
+      for (let v = 0; v < 3; v++) heights.add(buffer.readFloatLE(offset + v * 12 + 8).toFixed(2));
     }
 
     /*
@@ -400,5 +404,80 @@ test.describe('crop (§5.3)', () => {
     await expect(reset).toBeVisible();
     await reset.click();
     await expect(reset).toHaveCount(0);
+  });
+});
+
+test.describe('export orientation and 3MF', () => {
+  /** Min/max per axis across every vertex of a binary STL. */
+  function stlExtents(buffer: Buffer) {
+    const triangles = buffer.readUInt32LE(80);
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < triangles; i++) {
+      const base = 84 + i * 50 + 12;
+      for (let v = 0; v < 3; v++) {
+        for (let a = 0; a < 3; a++) {
+          const value = buffer.readFloatLE(base + v * 12 + a * 4);
+          lo[a] = Math.min(lo[a], value);
+          hi[a] = Math.max(hi[a], value);
+        }
+      }
+    }
+    return { triangles, lo, hi };
+  }
+
+  test('exports STL with thickness along Z, resting on the bed', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await generate(page);
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: /download stl/i }).click(),
+    ]);
+    const { triangles, lo, hi } = stlExtents(readFileSync(await download.path()));
+    const spans = hi.map((v, i) => v - lo[i]);
+
+    /*
+     * Slicers treat Z as up. The preview tilts printer space into three.js's
+     * Y-up world, and when that rotation reached the exporter the sign arrived
+     * standing on its edge.
+     */
+    expect(spans[2]).toBeLessThan(spans[0]);
+    expect(spans[2]).toBeLessThan(spans[1]);
+    expect(lo[2]).toBeCloseTo(0, 3);
+    expect(triangles).toBeGreaterThan(0);
+  });
+
+  test('exports a 3MF holding every colour as one aligned build item', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await generate(page);
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: /download 3mf/i }).click(),
+    ]);
+
+    const files = unzipSync(readFileSync(await download.path()));
+    expect(Object.keys(files).sort()).toEqual([
+      '3D/3dmodel.model',
+      '[Content_Types].xml',
+      '_rels/.rels',
+    ]);
+
+    const xml = strFromU8(files['3D/3dmodel.model']);
+    expect(xml).toContain('unit="millimeter"');
+
+    // One material per colour, and one build item so the parts stay together.
+    expect(xml.match(/<base /g)).toHaveLength(4);
+    expect(xml.match(/<item objectid="\d+"\/>/g)).toHaveLength(1);
+    expect(xml.match(/<component objectid="\d+"\/>/g)).toHaveLength(4);
+
+    for (const hex of ['#2F9D8FFF', '#F2681CFF', '#E7EDECFF', '#4D7FBEFF']) {
+      expect(xml).toContain(`displaycolor="${hex}"`);
+    }
+
+    // Positive octant, as 3MF expects of a build volume.
+    const coords = [...xml.matchAll(/(?:x|y|z)="(-?[\d.]+)"/g)].map((m) => Number(m[1]));
+    expect(Math.min(...coords)).toBeGreaterThanOrEqual(0);
   });
 });

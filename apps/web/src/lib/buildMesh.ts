@@ -190,9 +190,14 @@ export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
     child.position.y -= center.y;
   }
 
-  // Extrusion runs along +Z; lay the sign flat so thickness points up.
-  group.rotation.x = -Math.PI / 2;
-
+  /*
+   * The group is left in printer space: X and Y span the artwork, +Z is
+   * thickness, and the sign rests on z=0. That is what STL and 3MF consumers
+   * expect, and rotating here baked the preview's orientation into every
+   * export — the sign arrived in a slicer standing on its edge, because
+   * three.js wants Y up and a print bed wants Z up. The viewer applies that
+   * rotation itself, where it belongs.
+   */
   const size = box.getSize(new THREE.Vector3());
   return {
     group,
