@@ -10,14 +10,58 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    /*
+     * Shape and size checks.
+     *
+     * The client already refuses oversized saves, but a client check only
+     * constrains that client — anyone holding a token can write here directly.
+     * Firestore's hard ceiling is 1 MiB per document, and a project that
+     * approaches it is a denial of service against its own owner's list.
+     */
+    function isValidProject(data) {
+      return data.keys().hasOnly(
+               ['ownerUid', 'name', 'svg', 'thumbnailDataUrl', 'config', 'createdAt', 'updatedAt']
+             )
+             && data.ownerUid is string
+             && data.name is string && data.name.size() <= 200
+             && data.svg is string && data.svg.size() <= 900000
+             && data.thumbnailDataUrl is string
+             && data.thumbnailDataUrl.size() <= 200000
+             // Thumbnails are rendered into an <img>; anything that is not an
+             // inline image could make a browser fetch a third party.
+             && data.thumbnailDataUrl.matches('^(data:image/(png|jpeg|webp);base64,.*)?$')
+             && data.config is map;
+    }
+
     match /users/{uid} {
-      allow read, write: if isOwner(uid);
+      allow read: if isOwner(uid);
+      allow write: if isOwner(uid)
+                   && request.resource.data.keys().hasOnly(
+                        ['displayName', 'email', 'photoURL', 'createdAt']
+                      );
     }
 
     match /projects/{projectId} {
       allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
-      allow update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+
+      allow create: if isSignedIn()
+                    && request.resource.data.ownerUid == request.auth.uid
+                    && isValidProject(request.resource.data);
+
+      /*
+       * Both sides of the ownership check matter.
+       *
+       * Testing only `resource.data.ownerUid` proves the writer owns the
+       * document as it stands and says nothing about what they are writing —
+       * so an owner could set ownerUid to somebody else's uid and push a
+       * document, and its thumbnail, into that person's project list.
+       */
+      allow update: if isSignedIn()
+                    && resource.data.ownerUid == request.auth.uid
+                    && request.resource.data.ownerUid == request.auth.uid
+                    && isValidProject(request.resource.data);
+
+      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
     }
 
     // Deny everything else by default.

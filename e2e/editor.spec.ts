@@ -588,3 +588,32 @@ test.describe('deleting layers', () => {
   });
 });
 
+
+test.describe('degenerate builds', () => {
+  test('refuses to build a sign with nothing in it', async ({ page }) => {
+    /*
+     * A crop can land on empty space and layers can be deleted down to
+     * nothing. Both produced a silent zero-triangle mesh: an empty viewport,
+     * "0 × 0.0 × 0.00 mm", and an export button that would write an empty file.
+     */
+    await upload(page, 'gapped.svg');
+    await page.getByRole('button', { name: 'Crop', exact: true }).click();
+
+    /*
+     * Land the window on the empty middle. Each drag is a fraction of the
+     * window as it stands, so the second is measured against the first's
+     * result: right to 0..0.5, then left to 0.25..0.5 — between the shapes at
+     * 0..0.13 and 0.87..1.
+     */
+    await dragCropHandle(page, 'right', -0.5);
+    await dragCropHandle(page, 'left', 0.5);
+    await page.getByRole('button', { name: 'Done' }).click();
+
+    await page.getByRole('button', { name: /generate mesh/i }).click();
+
+    await expect(page.getByRole('alert')).toContainText(/nothing to build/i);
+    await expect(page.getByText(/triangles/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /download 3mf/i })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /download stl/i })).toBeDisabled();
+  });
+});

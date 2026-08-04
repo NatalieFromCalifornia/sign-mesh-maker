@@ -13,9 +13,11 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
-    "test:all": "npm run test && npm run test:e2e"
+    "test:all": "npm run test && npm run test:rules && npm run test:e2e",
+    "test:rules": "firebase emulators:exec --only firestore --project sign-mesh-maker-rules-test \"node rules-tests/firestore.test.mjs\""
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.1",
     "@playwright/test": "^1.62.1",
     "wrangler": "^4.0.0"
   }

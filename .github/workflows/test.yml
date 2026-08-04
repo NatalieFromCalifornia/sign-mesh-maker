@@ -22,6 +22,20 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
 
+  rules:
+    name: Firestore security rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # The emulator needs a JVM, which the runner image already has. A fake
+      # project id keeps this off the real database.
+      - run: npm run test:rules
+
   e2e:
     name: Browser tests
     runs-on: ubuntu-latest

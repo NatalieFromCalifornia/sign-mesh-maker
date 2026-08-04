@@ -30,6 +30,9 @@ export const FIRESTORE_DOC_LIMIT = 1_048_576;
  */
 export const SAFE_DOC_BUDGET = 900_000;
 
+/** Mirrors the ceiling in firestore.rules; both must move together. */
+export const MAX_PROJECT_NAME = 200;
+
 export class ProjectTooLargeError extends Error {}
 export class NotSignedInError extends Error {}
 
@@ -60,6 +63,20 @@ export function describeFirestoreError(cause: unknown, action: string): string {
 }
 
 const encoder = new TextEncoder();
+
+/**
+ * Accepts only inline image data for a thumbnail.
+ *
+ * These go straight into an `<img src>`. The security rules reject anything
+ * else on write, but a document predating those rules — or any future path
+ * that reaches this code — should not be able to make a browser fetch a
+ * third-party URL just by being listed.
+ */
+export function safeThumbnail(value: unknown): string {
+  return typeof value === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(value)
+    ? value
+    : '';
+}
 
 /** Approximate stored size of the parts that can actually grow. */
 export function estimateProjectSize(input: {
@@ -94,7 +111,7 @@ function toSummary(id: string, data: DocumentData): ProjectSummary {
     id,
     ownerUid: data.ownerUid,
     name: data.name ?? 'Untitled',
-    thumbnailDataUrl: data.thumbnailDataUrl ?? '',
+    thumbnailDataUrl: safeThumbnail(data.thumbnailDataUrl),
     createdAt: toMillis(data.createdAt),
     updatedAt: toMillis(data.updatedAt),
   };
@@ -163,7 +180,7 @@ export async function saveProject(input: SaveProjectInput): Promise<string> {
     ref,
     {
       ownerUid: input.ownerUid,
-      name: input.name,
+      name: input.name.slice(0, MAX_PROJECT_NAME),
       svg: input.svg,
       thumbnailDataUrl: input.thumbnailDataUrl,
       config: input.config,
@@ -180,7 +197,10 @@ export async function saveProject(input: SaveProjectInput): Promise<string> {
 
 export async function renameProject(id: string, name: string): Promise<void> {
   const store = requireDb();
-  await updateDoc(doc(store, 'projects', id), { name, updatedAt: serverTimestamp() });
+  await updateDoc(doc(store, 'projects', id), {
+    name: name.slice(0, MAX_PROJECT_NAME),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function deleteProject(id: string): Promise<void> {

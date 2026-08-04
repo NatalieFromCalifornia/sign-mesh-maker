@@ -29,6 +29,7 @@ import { downloadStl, stlFilename } from '../lib/exportStl';
 import { download3mf, threeMfFilename } from '../lib/export3mf';
 import { renderThumbnail } from '../lib/thumbnail';
 import {
+  MAX_PROJECT_NAME,
   ProjectTooLargeError,
   describeFirestoreError,
   loadProject,
@@ -233,6 +234,24 @@ export function Editor() {
     requestAnimationFrame(() => {
       try {
         const built = buildMesh(effective, config);
+
+        /*
+         * A crop can land entirely on empty space, and every layer can be
+         * deleted down to nothing printable. Both produced a silent zero-
+         * triangle mesh: an empty viewport, "0 × 0.0 × 0.00 mm", and an export
+         * button that would happily write an empty file.
+         */
+        if (built.triangles === 0) {
+          disposeGroup(built.group);
+          setGroup((current) => {
+            if (current) disposeGroup(current);
+            return null;
+          });
+          setStats(null);
+          setError('Nothing to build — the crop or the remaining layers contain no artwork.');
+          return;
+        }
+
         setGroup((current) => {
           if (current) disposeGroup(current);
           return built.group;
@@ -846,6 +865,9 @@ export function Editor() {
                     id="project-name"
                     value={projectName}
                     onChange={(e) => setProjectName(e.target.value)}
+                    // Matches the ceiling in firestore.rules; without it a long
+                    // name comes back as an unexplained permission-denied.
+                    maxLength={MAX_PROJECT_NAME}
                     placeholder="Untitled sign"
                     className="h-10 rounded-[3px] border border-rule bg-mat px-3 text-sm text-chalk outline-none placeholder:text-graphite/50 focus:border-rule-strong"
                   />

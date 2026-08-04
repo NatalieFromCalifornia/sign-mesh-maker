@@ -1,0 +1,21 @@
+# Security headers for the static site. Cloudflare Workers reads this from the
+# assets directory; Vite copies public/ into dist/ verbatim.
+
+/*
+  # Everything runs from this origin. 'unsafe-inline' for styles is required by
+  # the inline critical CSS Vite emits; scripts get no such exemption.
+  # blob: and data: cover the object URLs used for STL/3MF downloads and the
+  # inline JPEG thumbnails. connect-src reaches Firebase Auth and Firestore,
+  # and nothing else — an injected script could not exfiltrate to its own host.
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://lh3.googleusercontent.com; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://securetoken.googleapis.com wss://*.firebaseio.com; worker-src 'self' blob:; frame-src https://sign-mesh-maker.firebaseapp.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  # No reason for this app to be framed; clickjacking a Delete button is the
+  # concrete risk.
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  # The app never needs these, and saying so stops a dependency asking later.
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), payment=(), usb=()
+
+# Hashed bundles are immutable; the HTML that points at them must never be.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
