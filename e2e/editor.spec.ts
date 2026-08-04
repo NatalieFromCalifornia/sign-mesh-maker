@@ -21,7 +21,8 @@ async function upload(page: Page, name: string) {
  * fold, where a raw mouse move lands on nothing.
  */
 async function dragCropHandle(page: Page, handle: string, fractionOfWidth: number) {
-  const target = page.locator(`[aria-label="Resize crop ${handle}"]`);
+  // Handles are labelled for screen readers ("right", not "e").
+  const target = page.getByRole('slider', { name: `Resize crop ${handle}` });
   await target.hover();
 
   const box = (await page.getByRole('group', { name: 'Crop window' }).boundingBox())!;
@@ -383,13 +384,50 @@ test.describe('crop (§5.3)', () => {
     await expect(page.getByRole('group', { name: 'Crop window' })).toBeVisible();
 
     // Keep roughly the left half.
-    await dragCropHandle(page, 'e', -0.5);
+    await dragCropHandle(page, 'right', -0.5);
 
     await page.getByRole('button', { name: 'Done' }).click();
     await page.getByRole('button', { name: /regenerate mesh/i }).click();
 
     // Half the width at the same height is a taller sign for a fixed width.
     await expect(stats).toContainText('120 × 144.0');
+  });
+
+  test('crops from the keyboard', async ({ page }) => {
+    /*
+     * The handles were pointer-only, so cropping could not be done from a
+     * keyboard at all — §8 asks for standard keyboard navigation.
+     */
+    await upload(page, 'sign-4-colors.svg');
+    await page.getByRole('button', { name: 'Crop', exact: true }).click();
+
+    const handle = page.getByRole('slider', { name: 'Resize crop right' });
+    await handle.focus();
+    await expect(handle).toBeFocused();
+
+    const before = (await page.getByRole('group', { name: 'Crop window' }).boundingBox())!;
+    for (let i = 0; i < 5; i++) await handle.press('ArrowLeft');
+    const after = (await page.getByRole('group', { name: 'Crop window' }).boundingBox())!;
+
+    expect(after.width).toBeLessThan(before.width);
+    await expect(page.getByRole('button', { name: 'Reset' })).toBeVisible();
+  });
+
+  test('moves the crop window with arrow keys', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await page.getByRole('button', { name: 'Crop', exact: true }).click();
+
+    // Shrink first, or a full-size window has nowhere to move.
+    await dragCropHandle(page, 'right', -0.4);
+
+    const window = page.getByRole('group', { name: 'Crop window' });
+    await window.focus();
+    const before = (await window.boundingBox())!;
+    for (let i = 0; i < 5; i++) await window.press('ArrowRight');
+    const after = (await window.boundingBox())!;
+
+    expect(after.x).toBeGreaterThan(before.x);
+    expect(after.width).toBeCloseTo(before.width, 0);
   });
 
   test('offers a reset only once the artwork is cropped', async ({ page }) => {
@@ -399,7 +437,7 @@ test.describe('crop (§5.3)', () => {
     const reset = page.getByRole('button', { name: 'Reset' });
     await expect(reset).toHaveCount(0);
 
-    await dragCropHandle(page, 'e', -0.3);
+    await dragCropHandle(page, 'right', -0.3);
 
     await expect(reset).toBeVisible();
     await reset.click();

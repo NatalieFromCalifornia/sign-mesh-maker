@@ -1,4 +1,9 @@
-import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import {
+  useCallback,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import type { CropRect } from '@sign-mesh-maker/shared';
 import { cn } from '../lib/cn';
 
@@ -8,24 +13,28 @@ interface CropOverlayProps {
   /** Crop as fractions of the artwork box, measured from its top-left. */
   value: CropRect;
   onChange: (next: CropRect) => void;
-  /** Artwork aspect (w/h), used when the crop is locked to it. */
-  aspect: number;
+  /**
+   * Hold the crop square in the box's own space. The box already carries the
+   * artwork's aspect, so no ratio needs passing in.
+   */
   lockAspect: boolean;
   className?: string;
 }
 
 /** Smallest crop that still leaves something to print. */
 const MIN_SIZE = 0.04;
+/** Arrow-key step, as a fraction of the artwork. Shift moves ten times as far. */
+const KEY_STEP = 0.01;
 
-const HANDLES: { id: Handle; style: string; cursor: string }[] = [
-  { id: 'nw', style: 'left-0 top-0 -translate-x-1/2 -translate-y-1/2', cursor: 'nwse-resize' },
-  { id: 'ne', style: 'right-0 top-0 translate-x-1/2 -translate-y-1/2', cursor: 'nesw-resize' },
-  { id: 'sw', style: 'left-0 bottom-0 -translate-x-1/2 translate-y-1/2', cursor: 'nesw-resize' },
-  { id: 'se', style: 'right-0 bottom-0 translate-x-1/2 translate-y-1/2', cursor: 'nwse-resize' },
-  { id: 'n', style: 'left-1/2 top-0 -translate-x-1/2 -translate-y-1/2', cursor: 'ns-resize' },
-  { id: 's', style: 'left-1/2 bottom-0 -translate-x-1/2 translate-y-1/2', cursor: 'ns-resize' },
-  { id: 'w', style: 'left-0 top-1/2 -translate-x-1/2 -translate-y-1/2', cursor: 'ew-resize' },
-  { id: 'e', style: 'right-0 top-1/2 translate-x-1/2 -translate-y-1/2', cursor: 'ew-resize' },
+const HANDLES: { id: Handle; label: string; style: string; cursor: string }[] = [
+  { id: 'nw', label: 'top left', style: 'left-0 top-0 -translate-x-1/2 -translate-y-1/2', cursor: 'nwse-resize' },
+  { id: 'ne', label: 'top right', style: 'right-0 top-0 translate-x-1/2 -translate-y-1/2', cursor: 'nesw-resize' },
+  { id: 'sw', label: 'bottom left', style: 'left-0 bottom-0 -translate-x-1/2 translate-y-1/2', cursor: 'nesw-resize' },
+  { id: 'se', label: 'bottom right', style: 'right-0 bottom-0 translate-x-1/2 translate-y-1/2', cursor: 'nwse-resize' },
+  { id: 'n', label: 'top', style: 'left-1/2 top-0 -translate-x-1/2 -translate-y-1/2', cursor: 'ns-resize' },
+  { id: 's', label: 'bottom', style: 'left-1/2 bottom-0 -translate-x-1/2 translate-y-1/2', cursor: 'ns-resize' },
+  { id: 'w', label: 'left', style: 'left-0 top-1/2 -translate-x-1/2 -translate-y-1/2', cursor: 'ew-resize' },
+  { id: 'e', label: 'right', style: 'right-0 top-1/2 translate-x-1/2 -translate-y-1/2', cursor: 'ew-resize' },
 ];
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -41,13 +50,7 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
  * events to the handle that started it, and releasing outside still ends the
  * gesture cleanly.
  */
-export function CropOverlay({
-  value,
-  onChange,
-  aspect,
-  lockAspect,
-  className,
-}: CropOverlayProps) {
+export function CropOverlay({ value, onChange, lockAspect, className }: CropOverlayProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     handle: Handle | 'move';
@@ -132,6 +135,62 @@ export function CropOverlay({
     [onChange, lockAspect],
   );
 
+  /**
+   * Keyboard equivalent of dragging.
+   *
+   * The handles were pointer-only, which meant cropping could not be done from
+   * a keyboard at all — arrow keys now nudge whichever edge the handle owns,
+   * and Shift moves in larger steps for crossing the artwork quickly.
+   */
+  const nudge = useCallback(
+    (handle: Handle | 'move', event: ReactKeyboardEvent) => {
+      const step = (event.shiftKey ? KEY_STEP * 10 : KEY_STEP);
+      const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
+      const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+      if (dx === 0 && dy === 0) return;
+
+      event.preventDefault();
+      /*
+       * A handle sits inside the window, which listens for the same keys to
+       * move the crop. Without this the resize is applied and then immediately
+       * overwritten by the parent acting on the value it captured before it.
+       */
+      event.stopPropagation();
+      let { x, y, width, height } = value;
+
+      if (handle === 'move') {
+        onChange({
+          ...value,
+          x: clamp01(Math.min(Math.max(0, x + dx), 1 - width)),
+          y: clamp01(Math.min(Math.max(0, y + dy), 1 - height)),
+        });
+        return;
+      }
+
+      if (handle.includes('w')) {
+        const nextX = clamp01(Math.min(Math.max(0, x + dx), x + width - MIN_SIZE));
+        width = x + width - nextX;
+        x = nextX;
+      }
+      if (handle.includes('e')) width = Math.min(1 - x, Math.max(MIN_SIZE, width + dx));
+      if (handle.includes('n')) {
+        const nextY = clamp01(Math.min(Math.max(0, y + dy), y + height - MIN_SIZE));
+        height = y + height - nextY;
+        y = nextY;
+      }
+      if (handle.includes('s')) height = Math.min(1 - y, Math.max(MIN_SIZE, height + dy));
+
+      if (lockAspect) {
+        const horizontal = handle === 'w' || handle === 'e' || handle.length === 2;
+        if (horizontal) height = Math.min(1 - y, width);
+        else width = Math.min(1 - x, height);
+      }
+
+      onChange({ x, y, width, height });
+    },
+    [value, onChange, lockAspect],
+  );
+
   const end = useCallback((event: ReactPointerEvent) => {
     const target = event.target as HTMLElement;
     if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
@@ -180,7 +239,10 @@ export function CropOverlay({
       <div
         role="group"
         aria-label="Crop window"
-        className="absolute cursor-move touch-none border border-signal"
+        tabIndex={0}
+        // Focusable so the window can be repositioned without a pointer.
+        onKeyDown={(e) => nudge('move', e)}
+        className="absolute cursor-move touch-none border border-signal focus-visible:outline-2"
         style={style}
         onPointerDown={begin('move')}
         onPointerMove={move}
@@ -198,9 +260,17 @@ export function CropOverlay({
           <span
             key={handle.id}
             role="slider"
-            tabIndex={-1}
-            aria-label={`Resize crop ${handle.id}`}
-            aria-valuenow={Math.round(value.width * 100)}
+            tabIndex={0}
+            aria-label={`Resize crop ${handle.label}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(
+              (handle.id === 'n' || handle.id === 's' ? value.height : value.width) * 100,
+            )}
+            aria-valuetext={`${Math.round(value.width * 100)}% wide, ${Math.round(
+              value.height * 100,
+            )}% tall`}
+            onKeyDown={(e) => nudge(handle.id, e)}
             className={cn(
               'absolute size-2.5 touch-none border border-mat bg-signal',
               handle.style,

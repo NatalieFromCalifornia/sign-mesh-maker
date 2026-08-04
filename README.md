@@ -1,6 +1,7 @@
 # Sign Maker
 
-Turn an SVG into a multi-color, 3D-printable STL sign.
+Turn an SVG into a multi-color, 3D-printable sign — exported as 3MF (colours
+and filament slots included) or plain STL.
 
 Vector input only — each fill color becomes a printed layer. Raster input was
 removed by decision; see the scope note at the top of `docs/requirements.md`.
@@ -31,6 +32,6 @@ npm run dev
 ## Prerequisites (manual, one-time setup)
 
 See `docs/manual-setup.md` for the steps that need to happen outside of the
-codebase (Firebase project creation, Google auth provider, Cloudflare Pages
+codebase (Firebase project creation, Google auth provider, the Cloudflare Workers
 project, GitHub secrets, etc.) before Claude Code's changes can actually run
 and deploy.

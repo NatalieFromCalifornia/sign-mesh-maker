@@ -16,7 +16,6 @@ import {
   SvgParseError,
   type ParsedSvg,
 } from '../lib/svgLayers';
-import type { CropRect } from '@sign-mesh-maker/shared';
 import {
   DEFAULT_FLAT_GAP_MM,
   FULL_CROP,
@@ -675,7 +674,6 @@ export function Editor() {
                     <CropOverlay
                       value={config.crop ?? FULL_CROP}
                       onChange={(crop) => update({ crop })}
-                      aspect={parsed.width / parsed.height}
                       lockAspect={lockAspect}
                     />
                   )}

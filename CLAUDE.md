@@ -15,7 +15,7 @@ Web app that converts an SVG into a multi-color 3D-printable STL sign.
 - **`Metadata/project_settings.config` declares one filament per layer, carrying its colour** — this is where slot colours are read from. Without it, parts land on slots that keep whatever colours were already configured. It carries *only* `filament_colour` and `filament_type`; a fuller config would start overriding machine settings belonging to whoever opens the file.
 - **Slots are not capped.** Orca lets filaments be added freely, so all three lists — colorgroup, extruder assignments, filament array — are sized to the layer count. An earlier version clamped to an assumed printer capacity and threw away colours the slicer was willing to hold.
 - **Exports are in printer space: +Z is thickness and the sign rests on z=0.** `buildMesh` produces that; the viewer applies the Y-up tilt itself via a pivot. Never rotate the group in `buildMesh`, and never read `matrixWorld` in an exporter — the group is parented under that pivot, so world matrices carry the tilt and the sign arrives in a slicer standing on its edge. `partsFromGroup` inverts the group's own world matrix for exactly this reason, and both STL and 3MF go through it so they cannot disagree.
-- **Current state:** every §10 phase in scope is built — routing, Google auth, SVG upload, crop, per-layer recolouring and merging, stepped *and* flat mesh modes, the three.js preview, binary STL download, and project save/load. Only stretch goals remain (per-colour STL export, §5.7).
+- **Current state:** every §10 phase in scope is built — routing, Google auth, SVG upload, crop, per-layer recolouring and merging, stepped *and* flat mesh modes, the three.js preview, binary STL download, and project save/load. 3MF export replaces the per-colour STL zip §5.7 floats, which is why that stretch goal is not built and should not be.
 - **Crop is stored as fractions of the artwork box**, not artwork units as §6 implies. The SVG is re-parsed on load, so any change to how bounds are derived would silently move a crop expressed absolutely.
 - **Flat mode uses polygon offsetting, not CSG.** §5.5 specifies insetting each region by half the gap, which `clipper-lib` does robustly — a region thinner than the channel vanishes instead of folding into a self-intersecting outline that triangulates into a broken solid. §9.4 floats `three-bvh-csg`/`manifold-3d` as an alternative; they aren't needed and aren't installed.
 - **Mesh generation waits for its button** (§5.6) — triangulation is the expensive step, and dimension fields get fiddled with continuously, so changing one marks the mesh stale rather than rebuilding.
@@ -68,7 +68,8 @@ E2E_BASE_URL=https://signmaker.nataliepyre.com npx playwright test   # against t
 The HiDPI bug was invisible for a while precisely because the harness ran at `deviceScaleFactor: 1`, which is why display scaling is now its own Playwright project rather than an option someone can quietly drop.
 
 Notes:
-- `npm run lint` currently does nothing — no workspace defines a `lint` script and no linter is configured. If you add one, wire it into `apps/web/package.json` so the root script picks it up.
+- `npm run lint` runs ESLint over `apps/web`. It is deliberately narrow — behaviour is the test suites' job — and exists for what tests cannot see: hook dependency mistakes, dead code left by a refactor, and `any` slipping past `tsc`. `react-hooks/set-state-in-effect` is off on purpose; every hit in this codebase is an async load or a prop sync it cannot tell from the bug it targets, and a rule that is wrong every time teaches people to ignore it.
+- **Routes are lazy-loaded and `three`/`firebase` are separate chunks.** `/login` transfers 630 KB against the editor's 1,296 KB; before splitting, every page paid the full amount. The editor is unchanged because it genuinely needs three — deferring that too would mean dynamically importing the whole geometry pipeline, which is a real refactor of well-tested code for a moderate win.
 
 ## Key architectural constraints (do not deviate without asking)
 - **No backend, ever, by design.** Firebase stays on the Spark (free) plan — no billing account is attached, and it should stay that way. This rules out Firebase Storage and Firebase Cloud Functions. Everything (SVG parsing, mesh generation, STL export) runs client-side in the browser.
@@ -105,7 +106,7 @@ Mesh generation is the only expensive step left, and it stays behind its button 
 
 ## Repo artifacts that are dead / misleading
 - There is deliberately no `functions/` directory and no `storage.rules` — both were deleted as leftovers from a pre-Spark-decision scaffold. Cloud Functions and Storage require Blaze and are out of scope (requirements §9). Don't recreate them.
-- `README.md` and parts of `docs/requirements.md` say "Cloudflare Pages." The actual target is Cloudflare Workers with static assets (`wrangler.jsonc`); `docs/manual-setup.md` §7 has the accurate flow.
+- Parts of `docs/requirements.md` say "Cloudflare Pages." The actual target is Cloudflare Workers with static assets (`wrangler.jsonc`); `docs/manual-setup.md` §7 has the accurate flow, and the README is corrected.
 - `.firebaserc` aliases `sign-mesh-maker-staging` → project `sign-mesh-maker`; there is only one Firebase project, despite requirements §9 recommending a separate staging project.
 
 ## Environment
