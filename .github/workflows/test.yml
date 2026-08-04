@@ -31,10 +31,20 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      # The Firestore emulator is a Java program. Declaring the JDK rather than
+      # relying on whatever the runner image ships keeps this from breaking
+      # when that image changes.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - run: npm ci
-      # The emulator needs a JVM, which the runner image already has. A fake
-      # project id keeps this off the real database.
+      # A fake project id keeps this off the real database.
       - run: npm run test:rules
+        env:
+          # Emulator downloads land here; caching them is not worth the
+          # complexity for a job this short.
+          FIREBASE_EMULATORS_PATH: ${{ runner.temp }}/firebase-emulators
 
   e2e:
     name: Browser tests
