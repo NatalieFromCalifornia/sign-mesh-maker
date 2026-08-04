@@ -14,7 +14,7 @@
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
     "test:all": "npm run test && npm run test:rules && npm run test:e2e",
-    "test:rules": "firebase emulators:exec --only firestore --project sign-mesh-maker-rules-test \"node rules-tests/firestore.test.mjs\""
+    "test:rules": "npx --yes firebase-tools emulators:exec --only firestore --project sign-mesh-maker-rules-test \"node rules-tests/firestore.test.mjs\""
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.1",
