@@ -68,9 +68,9 @@ export interface LayerAssignment {
  * requirements §5.4 defines it.
  *
  * Every region is solid from the bed up to its own height rather than sitting
- * on a separate slab. The union of all regions is the backing, so there's no
- * duplicated overlapping geometry to confuse a slicer — and the printed result
- * is identical.
+ * on a separate slab, and each is then cut back to the part no taller layer
+ * covers. The union of all regions is the backing, and nothing is duplicated
+ * for a slicer to reconcile — the printed result is identical either way.
  */
 export function layerHeight(index: number, config: MeshConfig): number {
   /*
@@ -103,24 +103,30 @@ function boxOf(shapes: THREE.Shape[]): THREE.Box2 {
 }
 
 /**
- * Cuts a layer that nothing would show of out of the layers burying it.
+ * Cuts regions that nothing would show of out of whatever is burying them.
  *
  * Layer order is print height: the last layer is the tallest, so where two
- * overlap the higher one is what you see. Reordering can therefore hide a
- * layer completely — move a caption under the panel it sits on and the panel
- * simply swallows it, with the caption still printed, in colour, sealed inside
+ * overlap the higher one is what you see. Reordering or merging can therefore
+ * hide a region completely — put a caption under the panel it sits on and the
+ * panel swallows it, with the caption still printed, in colour, sealed inside
  * the sign where nobody will ever see it.
  *
- * Subtracting the buried layer from everything above it opens a hole down to
- * the buried layer's own height, so it reads as engraved into the layer that
- * was covering it. That is the shape the artwork asked for, at the stacking the
- * user asked for.
+ * Subtracting the buried region from everything above it opens a hole down to
+ * that region's own height, so it reads as engraved into whatever was covering
+ * it. That is the shape the artwork asked for, at the stacking the user asked
+ * for.
  *
- * Only layers that are *entirely* covered are treated this way, and that limit
- * is the whole reason this is safe. Backgrounds are underneath everything by
- * definition and overlap all of it; cutting on any overlap would subtract the
- * background from every layer above and erase the sign. A background still
- * shows in its margins, so it is never buried, and is never cut.
+ * Judged per shape rather than per layer, which matters as soon as anything is
+ * merged. Merging a caption into the background makes one layer whose area is
+ * overwhelmingly background; the layer is plainly not covered, so a per-layer
+ * test says nothing is wrong while the caption inside it disappears. Each
+ * region has to answer for itself.
+ *
+ * Only regions that are *entirely* covered qualify, and that limit is the whole
+ * reason this is safe. A background is underneath everything by definition and
+ * overlaps all of it; cutting on any overlap would subtract it from every layer
+ * above and erase the sign. A background still shows in its margins, so it is
+ * never buried, and is never cut.
  */
 export function revealBuriedLayers(layers: SvgLayer[]): SvgLayer[] {
   if (layers.length < 2) return layers;
@@ -128,26 +134,43 @@ export function revealBuriedLayers(layers: SvgLayer[]): SvgLayer[] {
   const result = layers.map((layer) => ({ ...layer, shapes: layer.shapes }));
 
   for (let i = 0; i < result.length - 1; i++) {
-    const own = shapesArea(result[i].shapes);
-    if (own <= 0) continue;
-
     const above = result.slice(i + 1).flatMap((layer) => layer.shapes);
     if (above.length === 0) continue;
 
-    const showing = shapesArea(subtractShapes(result[i].shapes, unionShapes(above)));
-    if (showing > own * BURIED_FRACTION) continue;
+    const cover = unionShapes(above);
+    const coverBoxes = cover.map((shape) => boxOf([shape]));
+
+    const buried = result[i].shapes.filter((shape) => {
+      const own = shapesArea([shape]);
+      if (own <= 0) return false;
+
+      /*
+       * Clip against only the parts of the cover this shape could possibly
+       * touch. A ring whose box misses the shape cannot remove any of it, so
+       * dropping it changes no answer — but it takes a glyph from being
+       * clipped against every other region on the sign to being clipped
+       * against the one panel it sits on, which is most of the cost of
+       * generating a detailed sign.
+       */
+      const box = boxOf([shape]);
+      const relevant = cover.filter((_, r) => coverBoxes[r].intersectsBox(box));
+      if (relevant.length === 0) return false;
+
+      return shapesArea(subtractShapes([shape], relevant)) <= own * BURIED_FRACTION;
+    });
+
+    if (buried.length === 0) continue;
 
     /*
-     * Cut from the layers that actually overlap it. Passing an untouched layer
-     * through the clipper would re-tessellate geometry for no reason, and the
-     * bounding boxes settle most pairs without one.
+     * Cut from the layers that actually overlap them. Passing an untouched
+     * layer through the clipper would re-tessellate geometry for no reason.
      */
-    const buried = boxOf(result[i].shapes);
+    const buriedBox = boxOf(buried);
     for (let j = i + 1; j < result.length; j++) {
-      if (!boxOf(result[j].shapes).intersectsBox(buried)) continue;
+      if (!boxOf(result[j].shapes).intersectsBox(buriedBox)) continue;
       result[j] = {
         ...result[j],
-        shapes: subtractShapes(result[j].shapes, result[i].shapes),
+        shapes: subtractShapes(result[j].shapes, buried),
       };
     }
   }
@@ -238,22 +261,40 @@ export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
   const insetUnits =
     config.flatMode && scale > 0 ? (config.flatGapMm ?? DEFAULT_FLAT_GAP_MM) / 2 / scale : 0;
 
+  /*
+   * What every layer above each one covers, accumulated top-down so each union
+   * folds a single layer into the result already computed rather than starting
+   * over from every shape above it. Rebuilding it per layer made generating a
+   * two-hundred-shape sign four times slower on its own.
+   */
+  const coverAbove: THREE.Shape[][] = new Array(parsed.layers.length).fill(null);
+  coverAbove[parsed.layers.length - 1] = [];
+  for (let i = parsed.layers.length - 2; i >= 0; i--) {
+    coverAbove[i] = unionShapes([...parsed.layers[i + 1].shapes, ...coverAbove[i + 1]]);
+  }
+
   parsed.layers.forEach((layer, index) => {
     /*
-     * In flat mode, cut away anything a later layer covers before insetting.
+     * Cut every layer back to the part no taller layer covers.
      *
-     * Layers are painted in document order, so a background reaches under
-     * everything drawn on it. At a single height that leaves two colours
-     * sharing one top face — z-fighting on screen, and two materials claiming
-     * one volume in the STL. Stepped mode does not need this: the heights
-     * differ, so the upper layer simply sits above.
+     * Layers each run solid from the bed to their own height, so wherever two
+     * overlap they occupy the same volume twice. Where they also share an
+     * outline — a background and the border drawn around its edge, which is
+     * most signs — that puts two outward-facing walls in exactly the same
+     * plane, and the preview z-fights along the whole edge of the sign. It
+     * hands a slicer two solids claiming one volume as well.
+     *
+     * Nothing is lost by removing it. The taller layer already fills the
+     * overlap from the bed up past where the shorter one ends, so the union —
+     * which is the printed object — is identical either way.
+     *
+     * Flat mode needs the same cut for a different reason: at a single height
+     * the overlap is two colours sharing one top face rather than one hiding
+     * inside the other.
      */
     const exclusive =
-      config.flatMode && index < parsed.layers.length - 1
-        ? subtractShapes(
-            layer.shapes,
-            unionShapes(parsed.layers.slice(index + 1).flatMap((l) => l.shapes)),
-          )
+      coverAbove[index].length > 0
+        ? subtractShapes(layer.shapes, coverAbove[index])
         : layer.shapes;
 
     const shapes = insetUnits > 0 ? insetShapes(exclusive, insetUnits) : exclusive;

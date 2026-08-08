@@ -33,7 +33,7 @@ vi.mock('../auth/AuthProvider', () => ({
 
 const { Editor } = await import('./Editor');
 
-/** Layer rows, top of the list first — which is the bottom of the printed stack. */
+/** Layer rows as displayed: top of the printed stack first. */
 function rowColors(): string[] {
   return screen
     .getAllByRole('listitem')
@@ -75,10 +75,15 @@ describe('layer order', () => {
     vi.clearAllMocks();
   });
 
-  it('lists layers in document order, lowest first', async () => {
+  /*
+   * Tallest first, so the list reads the way the sign is stacked and the up
+   * arrow moves a row upward. Listing lowest-first made "up" move a row down
+   * the screen.
+   */
+  it('lists layers top of the stack first', async () => {
     await uploadArtwork();
-    expect(rowColors()).toEqual(['#2f9d8f', '#f2681c', '#ffffff']);
-    expect(rowHeights()).toEqual(['2.00 mm', '2.40 mm', '2.80 mm']);
+    expect(rowColors()).toEqual(['#ffffff', '#f2681c', '#2f9d8f']);
+    expect(rowHeights()).toEqual(['2.80 mm', '2.40 mm', '2.00 mm']);
   });
 
   it('moves a layer up the stack and reassigns the heights by position', async () => {
@@ -86,9 +91,10 @@ describe('layer order', () => {
 
     await user.click(moveButton('#2f9d8f', 'up'));
 
-    expect(rowColors()).toEqual(['#f2681c', '#2f9d8f', '#ffffff']);
+    // It was the bottom row; up moves it one position toward the top.
+    expect(rowColors()).toEqual(['#ffffff', '#2f9d8f', '#f2681c']);
     // Height follows position, not the layer — the two simply swap.
-    expect(rowHeights()).toEqual(['2.00 mm', '2.40 mm', '2.80 mm']);
+    expect(rowHeights()).toEqual(['2.80 mm', '2.40 mm', '2.00 mm']);
   });
 
   it('moves a layer back down again', async () => {
@@ -97,7 +103,7 @@ describe('layer order', () => {
     await user.click(moveButton('#2f9d8f', 'up'));
     await user.click(moveButton('#2f9d8f', 'down'));
 
-    expect(rowColors()).toEqual(['#2f9d8f', '#f2681c', '#ffffff']);
+    expect(rowColors()).toEqual(['#ffffff', '#f2681c', '#2f9d8f']);
   });
 
   /*
@@ -115,7 +121,7 @@ describe('layer order', () => {
     expect(document.activeElement).toBe(moveButton('#2f9d8f', 'up'));
 
     await user.keyboard('{Enter}');
-    expect(rowColors()).toEqual(['#f2681c', '#ffffff', '#2f9d8f']);
+    expect(rowColors()).toEqual(['#2f9d8f', '#ffffff', '#f2681c']);
   });
 
   /*
@@ -125,6 +131,7 @@ describe('layer order', () => {
   it('disables the ends of the stack rather than hiding the control', async () => {
     await uploadArtwork();
 
+    // #2f9d8f is the bottom of the stack, #ffffff the top.
     expect(moveButton('#2f9d8f', 'down')).toBeDisabled();
     expect(moveButton('#ffffff', 'up')).toBeDisabled();
     expect(moveButton('#2f9d8f', 'up')).toBeEnabled();
@@ -139,12 +146,14 @@ describe('layer order', () => {
     await user.click(screen.getByRole('button', { name: 'Merge' }));
 
     await waitFor(() => expect(rowColors()).toHaveLength(2));
-    const [merged] = rowColors();
+    // The merged pair sits at the bottom of the stack; #ffffff is above it.
+    const shown = rowColors();
+    const merged = shown[shown.length - 1];
 
     await user.click(moveButton(merged, 'up'));
 
     // The merge survives the move: still two rows, still carrying both layers.
-    expect(rowColors()).toEqual(['#ffffff', merged]);
+    expect(rowColors()).toEqual([merged, '#ffffff']);
     expect(screen.getByText('2 merged')).toBeInTheDocument();
   });
 
@@ -154,6 +163,6 @@ describe('layer order', () => {
     await user.click(moveButton('#2f9d8f', 'up'));
     await user.click(screen.getByRole('button', { name: 'Reset' }));
 
-    expect(rowColors()).toEqual(['#2f9d8f', '#f2681c', '#ffffff']);
+    expect(rowColors()).toEqual(['#ffffff', '#f2681c', '#2f9d8f']);
   });
 });

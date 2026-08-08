@@ -296,6 +296,27 @@ describe('revealBuriedLayers', () => {
     expect(untouched.shapes[0]).toBe(elsewhere.shapes[0]);
   });
 
+  /*
+   * The per-layer version of this rule missed the case that reported it. A
+   * caption merged into the background makes one layer whose area is
+   * overwhelmingly background — plainly not covered — so nothing was punched
+   * and the caption simply disappeared. Each region has to answer for itself.
+   */
+  it('punches a buried shape out even when its layer is mostly visible', () => {
+    // One layer holding a full-bleed background and a caption, the way a merge
+    // with the background produces.
+    const merged = layer('#efebe4', rect(0, 0, 200, 100), rect(40, 20, 20, 10));
+    const panel = layer('#ad130f', rect(30, 10, 60, 30));
+
+    const [base, cut] = revealBuriedLayers([merged, panel]);
+
+    // The panel loses the caption's footprint, and only that.
+    expect(area(cut.shapes)).toBeCloseTo(1800 - 200, 3);
+    expect(cut.shapes[0].holes).toHaveLength(1);
+    // The background itself is untouched: it still shows all around the panel.
+    expect(area(base.shapes)).toBeCloseTo(20000 + 200, 3);
+  });
+
   it('passes a single layer straight through', () => {
     const only = [layer('#ffffff', rect(0, 0, 10, 10))];
     expect(revealBuriedLayers(only)).toBe(only);
@@ -327,5 +348,77 @@ describe('revealBuriedLayers', () => {
     // height for it to be visible from above.
     const box = new THREE.Box3().setFromObject(panel);
     expect(box.max.z).toBeCloseTo(layerHeight(1, CONFIG), 5);
+  });
+});
+
+
+/*
+ * Layers each run solid from the bed to their own height, so two that overlap
+ * occupy one volume twice. Where they also share an outline — a background and
+ * the border drawn around its edge — that puts two outward-facing walls in the
+ * same plane, which z-fights along the whole edge of the sign.
+ */
+describe('overlapping volume', () => {
+  const rect = (x: number, y: number, w: number, h: number) =>
+    new THREE.Shape([
+      new THREE.Vector2(x, y),
+      new THREE.Vector2(x + w, y),
+      new THREE.Vector2(x + w, y + h),
+      new THREE.Vector2(x, y + h),
+    ]);
+
+  /** A background and a border ring sharing one outer boundary, as most signs have. */
+  const framedSign = () => {
+    const border = rect(0, 0, 100, 60);
+    border.holes.push(
+      new THREE.Path([
+        new THREE.Vector2(4, 4),
+        new THREE.Vector2(96, 4),
+        new THREE.Vector2(96, 56),
+        new THREE.Vector2(4, 56),
+      ]),
+    );
+
+    return {
+      layers: [
+        { color: '#efebe4', shapes: [rect(0, 0, 100, 60)] },
+        { color: '#000000', shapes: [border] },
+      ],
+      width: 100,
+      height: 60,
+      bounds: new THREE.Box2(new THREE.Vector2(0, 0), new THREE.Vector2(100, 60)),
+    };
+  };
+
+  const footprints = (group: THREE.Group) =>
+    group.children.map((child) => {
+      const box = new THREE.Box3().setFromObject(child);
+      return { name: child.name, box };
+    });
+
+  it('does not extrude the background out to the border it shares an edge with', () => {
+    const { group } = buildMesh(framedSign(), CONFIG);
+    const background = footprints(group).find((f) => f.name === '#efebe4')!;
+    const border = footprints(group).find((f) => f.name === '#000000')!;
+
+    // The border still reaches the sign's outer edge.
+    expect(border.box.max.x - border.box.min.x).toBeCloseTo(CONFIG.widthMm, 1);
+    // The background has been cut back inside it, so the two outward-facing
+    // walls are no longer in the same plane.
+    expect(background.box.max.x - background.box.min.x).toBeLessThan(
+      border.box.max.x - border.box.min.x,
+    );
+  });
+
+  it('prints the same object: the union and the overall size are unchanged', () => {
+    const { group, sizeMm } = buildMesh(framedSign(), CONFIG);
+
+    // The taller layer already filled the overlap from the bed upward, so
+    // removing the duplicate leaves the printed solid identical.
+    expect(sizeMm.width).toBeCloseTo(CONFIG.widthMm, 3);
+    expect(sizeMm.depth).toBeCloseTo(layerHeight(1, CONFIG), 5);
+
+    const box = new THREE.Box3().setFromObject(group);
+    expect(box.min.z).toBeCloseTo(0, 5);
   });
 });

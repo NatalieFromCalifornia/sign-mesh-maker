@@ -826,7 +826,7 @@ export function Editor() {
 
             <Panel
               title={`Layers · ${layers.length}`}
-              description="Lowest first. Reorder, recolor, delete, or select two or more to merge."
+              description="Top of the stack first. Reorder, recolor, delete, or select two or more to merge."
               actions={
                 <div className="flex shrink-0 gap-2">
                   <Button
@@ -846,7 +846,16 @@ export function Editor() {
               }
             >
               <ul className="flex flex-col">
-                {layers.map((layer, i) => {
+                {/*
+                  Rendered tallest first, so the list reads the way the sign is
+                  stacked and "up" means up. Only the display is reversed —
+                  every index below is still the print index, lowest first,
+                  which is what the callbacks and the mesh agree on.
+                */}
+                {layers
+                  .map((layer, i) => ({ layer, i }))
+                  .reverse()
+                  .map(({ layer, i }) => {
                   const merged = groups[i]?.sourceIndices.length ?? 1;
                   const isSelected = selected.has(i);
 
@@ -921,31 +930,31 @@ export function Editor() {
                         reorder lists usually go wrong.
                       */}
                       <span className="flex shrink-0 flex-col overflow-hidden rounded-[2px] border border-rule">
-                        {([-1, 1] as const).map((delta) => (
+                        {([1, -1] as const).map((delta) => (
                           <button
                             key={delta}
                             type="button"
                             aria-label={`Move layer ${layer.color} ${
-                              delta === -1 ? 'down' : 'up'
+                              delta === 1 ? 'up' : 'down'
                             } the stack`}
                             title={
-                              delta === -1
-                                ? 'Print this layer lower'
-                                : 'Print this layer higher'
+                              delta === 1
+                                ? 'Print this layer higher'
+                                : 'Print this layer lower'
                             }
-                            disabled={delta === -1 ? i === 0 : i === layers.length - 1}
+                            disabled={delta === 1 ? i === layers.length - 1 : i === 0}
                             onClick={() => moveLayer(i, delta)}
                             className={cn(
                               'flex h-[11px] w-5 items-center justify-center text-graphite transition-colors',
                               'hover:bg-bench-2 hover:text-chalk',
-                              delta === 1 && 'border-t border-rule',
+                              delta === -1 && 'border-t border-rule',
                               'disabled:cursor-not-allowed disabled:opacity-30',
                               'disabled:hover:bg-transparent disabled:hover:text-graphite',
                             )}
                           >
                             <svg viewBox="0 0 10 6" className="w-2" aria-hidden="true">
                               <path
-                                d={delta === -1 ? 'M1 1.5l4 3 4-3' : 'M1 4.5l4-3 4 3'}
+                                d={delta === 1 ? 'M1 4.5l4-3 4 3' : 'M1 1.5l4 3 4-3'}
                                 fill="none"
                                 stroke="currentColor"
                                 strokeWidth="1.5"
