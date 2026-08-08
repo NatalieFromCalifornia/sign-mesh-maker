@@ -12,12 +12,15 @@ import {
   shapeToPathData,
   SvgParseError,
 } from './svgLayers';
+import { shapesArea } from './offset';
 import {
   CAIRO_PERCENT_SVG,
   HEX_SIGN_SVG,
+  EMPTY_SVG,
   OVERLAPPING_SAME_COLOR_SVG,
   SELF_INTERSECTING_SVG,
   STROKE_ONLY_SVG,
+  STROKED_BORDER_SVG,
 } from '../test/fixtures';
 
 const FALLBACK = new THREE.Color('#ffffff');
@@ -130,8 +133,40 @@ describe('parseSvgLayers', () => {
     expect(enclosed).toBeLessThan(5000);
   });
 
-  it('rejects artwork with nothing fillable', () => {
-    expect(() => parseSvgLayers(STROKE_ONLY_SVG)).toThrow(SvgParseError);
+  /*
+   * A printed sign has no strokes, so a stroked outline has to become a fill or
+   * it is simply not printed — and nothing says so, because every fill in the
+   * file still comes through. A sign whose only border was a stroked rounded
+   * rectangle arrived with no border at all.
+   */
+  it('prints a stroked border as a region of its own', () => {
+    const parsed = parseSvgLayers(STROKED_BORDER_SVG);
+
+    expect(parsed.layers.map((l) => l.color)).toEqual(['#e5dac5', '#102132']);
+
+    const [border] = parsed.layers.filter((l) => l.color === '#102132');
+    // A stroke straddles its line, so the ring is the perimeter by the width,
+    // give or take the corners.
+    const perimeter = 2 * (100 + 60);
+    expect(shapesArea(border.shapes)).toBeGreaterThan(perimeter * 6 * 0.9);
+    expect(shapesArea(border.shapes)).toBeLessThan(perimeter * 6 * 1.2);
+
+    // A ring, not a slab: without the hole the border is a filled panel that
+    // covers the whole sign.
+    expect(border.shapes[0].holes).toHaveLength(1);
+  });
+
+  it('prints a line that has only a stroke', () => {
+    const parsed = parseSvgLayers(STROKE_ONLY_SVG);
+
+    expect(parsed.layers).toHaveLength(1);
+    expect(parsed.layers[0].color).toBe('#000000');
+    // A 4-wide stroke down a diagonal of about 113 units.
+    expect(shapesArea(parsed.layers[0].shapes)).toBeGreaterThan(400);
+  });
+
+  it('rejects artwork with nothing paintable', () => {
+    expect(() => parseSvgLayers(EMPTY_SVG)).toThrow(SvgParseError);
   });
 });
 

@@ -86,6 +86,64 @@ function offsetRing(path: IntPoint[], delta: number): IntPoint[][] {
   return solution.filter((ring) => ring.length >= 3 && Math.abs(areaOf(ring)) > MIN_RING_AREA);
 }
 
+/**
+ * Turns a stroked line into the filled region the stroke paints.
+ *
+ * A printed sign has no strokes — every colour is a solid region of a certain
+ * thickness — so a stroke has to become a fill before it can be extruded, and
+ * a stroke is geometrically just the line offset by half its width to either
+ * side. Clipper offsets an open or closed line directly, which is the same
+ * machinery flat mode's channels already use.
+ *
+ * Without this a stroked outline is not printed and nothing says so: the file
+ * looks complete, every fill in it comes through, and only the border is
+ * quietly missing from the mesh.
+ */
+export function strokeToShapes(
+  points: THREE.Vector2[],
+  width: number,
+  closed: boolean,
+): THREE.Shape[] {
+  if (points.length < 2 || width <= 0) return [];
+
+  const scaled = [toPath(points)];
+  JS.ScaleUpPaths(scaled, SCALE);
+
+  const offsetter = new ClipperOffset(2, 0.25);
+  /*
+   * etClosedLine walks both sides of a closed line and yields the ring the
+   * stroke covers — an outer boundary and the inner one that becomes its hole.
+   * etOpenButt does the same for a line with two ends. Rounding the joins
+   * rather than mitring them: a stroke's corners are drawn by stroke-linejoin,
+   * which is round or bevelled far more often than it is a spike.
+   */
+  offsetter.AddPaths(
+    scaled,
+    JoinType.jtRound,
+    closed ? EndType.etClosedLine : EndType.etOpenButt,
+  );
+
+  const solution: IntPoint[][] = [];
+  offsetter.Execute(solution, (width / 2) * SCALE);
+  if (solution.length === 0) return [];
+
+  /*
+   * Back through a union to nest the rings. The offset hands back the outer
+   * and inner boundaries as separate paths; without resolving which contains
+   * which, the hole down the middle of the stroke is extruded as solid and the
+   * border comes out as a filled slab.
+   */
+  const clipper = new Clipper();
+  clipper.AddPaths(solution, PolyType.ptSubject, true);
+
+  const tree = new PolyTree();
+  if (!clipper.Execute(ClipType.ctUnion, tree, PolyFillType.pftNonZero, PolyFillType.pftNonZero)) {
+    return [];
+  }
+
+  return shapesFromTree(tree);
+}
+
 /** Forces a ring counter-clockwise (positive area) or clockwise. */
 function orient(ring: IntPoint[], counterClockwise: boolean): IntPoint[] {
   const positive = areaOf(ring) > 0;

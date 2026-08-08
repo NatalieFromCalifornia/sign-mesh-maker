@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { insetShapes, repairShapes, subtractShapes, unionShapes } from './offset';
+import {
+  insetShapes,
+  repairShapes,
+  shapesArea,
+  strokeToShapes,
+  subtractShapes,
+  unionShapes,
+} from './offset';
 
 function square(size: number, x = 0, y = 0): THREE.Shape {
   return new THREE.Shape([
@@ -295,5 +302,55 @@ describe('repairShapes', () => {
   it('keeps a degenerate outline rather than dropping the layer', () => {
     const sliver = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(1, 1)]);
     expect(repairShapes([sliver])).toHaveLength(1);
+  });
+});
+
+
+describe('strokeToShapes', () => {
+  const squareLine = [
+    new THREE.Vector2(0, 0),
+    new THREE.Vector2(100, 0),
+    new THREE.Vector2(100, 100),
+    new THREE.Vector2(0, 100),
+  ];
+
+  /*
+   * A printed sign has no strokes, so a stroked border has to become the region
+   * it paints or it is not printed at all — which is how a sign arrived with
+   * its only border missing and nothing to say why.
+   */
+  it('turns a closed line into the ring the stroke covers', () => {
+    const [ring] = strokeToShapes(squareLine, 10, true);
+
+    // Straddles the line, so it reaches 5 outside and 5 inside.
+    const box = boundsOf(ring);
+    expect(box.min.x).toBeCloseTo(-5, 1);
+    expect(box.max.x).toBeCloseTo(105, 1);
+
+    // A ring, not a slab: the hole is what lets the artwork inside show.
+    expect(ring.holes).toHaveLength(1);
+    // Perimeter by width, plus the corners.
+    expect(shapesArea([ring])).toBeGreaterThan(400 * 10 * 0.95);
+    expect(shapesArea([ring])).toBeLessThan(400 * 10 * 1.15);
+  });
+
+  it('turns an open line into a band with two ends', () => {
+    const [band] = strokeToShapes(
+      [new THREE.Vector2(0, 0), new THREE.Vector2(100, 0)],
+      10,
+      false,
+    );
+
+    expect(band.holes).toHaveLength(0);
+    expect(shapesArea([band])).toBeCloseTo(1000, -2);
+
+    const box = boundsOf(band);
+    expect(box.min.y).toBeCloseTo(-5, 1);
+    expect(box.max.y).toBeCloseTo(5, 1);
+  });
+
+  it('has nothing to draw for a zero width or a single point', () => {
+    expect(strokeToShapes(squareLine, 0, true)).toHaveLength(0);
+    expect(strokeToShapes([new THREE.Vector2(0, 0)], 10, false)).toHaveLength(0);
   });
 });

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
-import { repairShapes } from './offset';
+import { repairShapes, strokeToShapes } from './offset';
 
 export interface SvgLayer {
   /** Fill color as `#rrggbb`, and the identity used to group regions. */
@@ -52,6 +52,53 @@ function boundsOf(layers: SvgLayer[]): THREE.Box2 {
 }
 
 export class SvgParseError extends Error {}
+
+/** Resolves a `stroke` to `#rrggbb`, or null when nothing is stroked. */
+function strokeColor(style: Record<string, string> | undefined): string {
+  return resolveFill(style?.stroke, new THREE.Color('#000000'));
+}
+
+/**
+ * The filled region a path's stroke paints, flattened and flipped like a fill.
+ *
+ * Each subpath is outlined separately: a stroke follows the line, so two
+ * subpaths of one element are two separate bands rather than one region.
+ */
+function strokeShapes(
+  path: { subPaths: THREE.Path[]; userData?: { style?: Record<string, string> } },
+  divisions: number,
+): THREE.Shape[] {
+  const style = path.userData?.style;
+  const stroke = style?.stroke;
+  if (!stroke || stroke === 'none') return [];
+
+  const width = Number(style?.strokeWidth);
+  if (!Number.isFinite(width) || width <= 0) return [];
+  if (style?.strokeOpacity !== undefined && Number(style.strokeOpacity) === 0) return [];
+
+  const result: THREE.Shape[] = [];
+
+  for (const subPath of path.subPaths) {
+    const points = subPath.getPoints(divisions);
+    if (points.length < 2) continue;
+
+    /*
+     * A subpath that returns to its start is closed, and its stroke is a ring
+     * rather than a band with two ends. `Path` does not record that, so it is
+     * read back off the geometry.
+     */
+    const first = points[0];
+    const last = points[points.length - 1];
+    const closed = first.distanceTo(last) < 1e-6;
+    const line = closed ? points.slice(0, -1) : points;
+
+    for (const shape of strokeToShapes(line, width, closed)) {
+      result.push(flattenAndFlip(shape, 1));
+    }
+  }
+
+  return result;
+}
 
 function toHex(r: number, g: number, b: number): string {
   const channel = (v: number) =>
@@ -124,39 +171,56 @@ export function parseSvgLayers(svgText: string, curveDivisions = 24): ParsedSvg 
 
   const byColor = new Map<string, THREE.Shape[]>();
 
+  const add = (color: string, shapes: THREE.Shape[]) => {
+    if (shapes.length === 0) return;
+    const existing = byColor.get(color);
+    if (existing) existing.push(...shapes);
+    else byColor.set(color, shapes);
+  };
+
   for (const path of paths) {
     const style = path.userData?.style;
 
-    // Stroke-only or fully transparent geometry has nothing to extrude.
-    if (style?.fill === 'none') continue;
-    if (style?.fillOpacity !== undefined && Number(style.fillOpacity) === 0) continue;
+    const transparent =
+      style?.fillOpacity !== undefined && Number(style.fillOpacity) === 0;
 
-    const shapes = SVGLoader.createShapes(path);
-    if (shapes.length === 0) continue;
+    if (style?.fill !== 'none' && !transparent) {
+      const shapes = SVGLoader.createShapes(path);
 
-    // Read the raw attribute rather than trusting path.color, which is the
-    // result of the parse that fails on decimal percentages.
-    const color = resolveFill(style?.fill, path.color);
-    const existing = byColor.get(color);
+      // Read the raw attribute rather than trusting path.color, which is the
+      // result of the parse that fails on decimal percentages.
+      /*
+       * Repaired at parse time, not at mesh time, so every consumer sees simple
+       * polygons: the on-screen preview, the crop, the offsetting flat mode does,
+       * and the extrusion. Fixing it later would leave the previews disagreeing
+       * with the mesh about what the artwork is.
+       */
+      add(
+        resolveFill(style?.fill, path.color),
+        repairShapes(shapes.map((shape) => flattenAndFlip(shape, curveDivisions))),
+      );
+    }
+
     /*
-     * Repaired at parse time, not at mesh time, so every consumer sees simple
-     * polygons: the on-screen preview, the crop, the offsetting flat mode does,
-     * and the extrusion. Fixing it later would leave the previews disagreeing
-     * with the mesh about what the artwork is.
+     * Then the stroke, as a region in its own right.
+     *
+     * A printed sign has no strokes, so a stroked outline has to become a fill
+     * or it is simply not printed — and nothing says so, because the file is
+     * otherwise complete and every fill in it comes through. A sign whose only
+     * border was a stroked rounded rectangle arrived with no border at all.
+     *
+     * It is added after the fill of the same element, which is the order SVG
+     * paints them in, so a shape stroked in its own fill colour does not end up
+     * beneath itself.
      */
-    const flattened = repairShapes(
-      shapes.map((shape) => flattenAndFlip(shape, curveDivisions)),
-    );
-
-    if (existing) existing.push(...flattened);
-    else byColor.set(color, flattened);
+    add(strokeColor(style), strokeShapes(path, curveDivisions));
   }
 
   const layers: SvgLayer[] = [...byColor].map(([color, shapes]) => ({ color, shapes }));
 
   if (layers.length === 0) {
     throw new SvgParseError(
-      'No filled shapes found. This SVG may be strokes or text only — convert strokes and text to filled paths and try again.',
+      'Nothing printable found. This SVG may be text only — convert text to filled paths and try again.',
     );
   }
 

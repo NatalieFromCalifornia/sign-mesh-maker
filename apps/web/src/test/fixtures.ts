@@ -40,9 +40,28 @@ export const SELF_INTERSECTING_SVG = `<svg xmlns="http://www.w3.org/2000/svg" vi
   <path fill="#010101" d="M 0 0 L 60 0 L 60 40 L 20 40 L 20 10 L 80 10 L 80 50 L 0 50 Z"/>
 </svg>`;
 
-/** Strokes only — nothing fillable, so parsing must fail with a clear message. */
+/**
+ * A stroked line with no fill. Printable: the stroke becomes the region it
+ * paints, so this is one layer four units wide, not an empty sign.
+ */
 export const STROKE_ONLY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <path d="M 10 10 L 90 90" fill="none" stroke="#000000" stroke-width="4"/>
+</svg>`;
+
+/**
+ * A sign whose border is a stroke rather than a filled ring, which is how a
+ * design tool draws one unless the stroke is expanded on the way out.
+ *
+ * The fill and the stroke are different colours, so the border is a layer of
+ * its own — and it went missing entirely before strokes were printed.
+ */
+export const STROKED_BORDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+  <rect x="10" y="10" width="100" height="60" fill="#e5dac5" stroke="#102132" stroke-width="6"/>
+</svg>`;
+
+/** Nothing paintable at all — no fill, no stroke. */
+export const EMPTY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <path d="M 10 10 L 90 90" fill="none" stroke="none"/>
 </svg>`;
 
 /**
