@@ -44,3 +44,16 @@ export const SELF_INTERSECTING_SVG = `<svg xmlns="http://www.w3.org/2000/svg" vi
 export const STROKE_ONLY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <path d="M 10 10 L 90 90" fill="none" stroke="#000000" stroke-width="4"/>
 </svg>`;
+
+/**
+ * A background, a panel on it, and a caption inside the panel.
+ *
+ * Merging the caption into the background puts it at the background's
+ * position, under the panel, which covers it completely — the arrangement that
+ * made a merged caption vanish.
+ */
+export const CAPTION_ON_PANEL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <rect x="0" y="0" width="200" height="100" fill="#2f9d8f"/>
+  <rect x="40" y="20" width="120" height="60" fill="#ad130f"/>
+  <rect x="70" y="40" width="60" height="20" fill="#ffffff"/>
+</svg>`;

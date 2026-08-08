@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { HEX_SIGN_SVG } from '../test/fixtures';
+import { CAPTION_ON_PANEL_SVG, HEX_SIGN_SVG } from '../test/fixtures';
 
 /*
  * The reordering permutation is covered in svgLayers.test.ts. What this file
@@ -51,7 +51,7 @@ function rowHeights(): string[] {
 const moveButton = (color: string, direction: 'up' | 'down') =>
   screen.getByRole('button', { name: `Move layer ${color} ${direction} the stack` });
 
-async function uploadArtwork() {
+async function uploadArtwork(markup: string = HEX_SIGN_SVG) {
   const user = userEvent.setup();
   render(
     <MemoryRouter>
@@ -59,10 +59,10 @@ async function uploadArtwork() {
     </MemoryRouter>,
   );
 
-  const file = new File([HEX_SIGN_SVG], 'sign.svg', { type: 'image/svg+xml' });
+  const file = new File([markup], 'sign.svg', { type: 'image/svg+xml' });
   // jsdom's File does not implement Blob.text(), which the upload path reads
   // the markup through.
-  Object.defineProperty(file, 'text', { value: async () => HEX_SIGN_SVG });
+  Object.defineProperty(file, 'text', { value: async () => markup });
 
   await user.upload(document.querySelector('input[type=file]') as HTMLInputElement, file);
 
@@ -164,5 +164,41 @@ describe('layer order', () => {
     await user.click(screen.getByRole('button', { name: 'Reset' }));
 
     expect(rowColors()).toEqual(['#ffffff', '#f2681c', '#2f9d8f']);
+  });
+});
+
+describe('flat preview', () => {
+  /*
+   * The preview paints groups in order, so a region ordered under something
+   * that covers it is simply painted over. Reported after a merge: the mesh
+   * showed the caption engraved into its panel while the preview beside it
+   * showed the panel blank, and one of the two was lying.
+   */
+  it('shows a buried region through the hole opened for it', async () => {
+    const user = await uploadArtwork(CAPTION_ON_PANEL_SVG);
+
+    const solid = (fill: string) => {
+      const group = [...document.querySelectorAll('svg[role=img] g')].find(
+        (g) => g.getAttribute('fill') === fill,
+      )!;
+      // One subpath is a solid tile; a second is the hole cut through it.
+      return Math.max(
+        ...[...group.querySelectorAll('path')].map(
+          (path) => (path.getAttribute('d')?.match(/M/g) ?? []).length,
+        ),
+      );
+    };
+
+    // The panel starts solid, with the caption painted on top of it.
+    expect(solid('#ad130f')).toBe(1);
+
+    // Merging the caption into the background drops it underneath the panel.
+    await user.click(screen.getByLabelText('Select layer #ffffff'));
+    await user.click(screen.getByLabelText('Select layer #2f9d8f'));
+    await user.click(screen.getByRole('button', { name: 'Merge' }));
+    await waitFor(() => expect(rowColors()).toHaveLength(2));
+
+    // The panel now carries a hole, so the caption under it reads through.
+    expect(solid('#ad130f')).toBe(2);
   });
 });

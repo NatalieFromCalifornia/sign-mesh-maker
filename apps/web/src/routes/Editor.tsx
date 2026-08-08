@@ -26,6 +26,7 @@ import {
   isFullCrop,
   disposeGroup,
   layerAssignments,
+  revealBuriedLayers,
   type MeshConfig,
 } from '../lib/buildMesh';
 import { downloadStl, stlFilename } from '../lib/exportStl';
@@ -168,6 +169,26 @@ export function Editor() {
 
   const effective = useMemo(
     () => (parsed ? { ...parsed, layers: groups } : null),
+    [parsed, groups],
+  );
+
+  /**
+   * The artwork as it will actually read, for the flat preview and the saved
+   * thumbnail.
+   *
+   * Painting the groups in order is not enough. Order is paint order, so a
+   * region ordered under something that covers it is simply painted over —
+   * which is exactly the case `revealBuriedLayers` opens a hole for in the
+   * mesh. Without it the preview shows a caption swallowed by its panel while
+   * the sign beside it shows the same caption engraved into it, and one of the
+   * two is lying.
+   *
+   * Only the reveal, not the disjointing the mesh also does: that one exists to
+   * stop two solids filling one volume, and painter's order already puts the
+   * taller layer's colour on top in two dimensions.
+   */
+  const revealed = useMemo(
+    () => (parsed ? { ...parsed, layers: revealBuriedLayers(groups) } : null),
     [parsed, groups],
   );
 
@@ -575,13 +596,15 @@ export function Editor() {
     try {
       const colors = parsed.layers.map((layer, i) => assigned[i] ?? layer.color);
       /*
-       * From `effective`, not the parsed artwork: that is the merged, deleted
-       * and reordered stack the sign will actually be printed as, and a
-       * thumbnail of anything else is a picture of a sign nobody asked for.
+       * From the revealed stack, not the parsed artwork: that is the merged,
+       * deleted and reordered sign as it will actually be printed, holes and
+       * all, and a thumbnail of anything else is a picture of a sign nobody
+       * asked for.
        */
+      const source = revealed ?? effective ?? parsed;
       const thumbnailDataUrl = await renderThumbnail(
-        effective ?? parsed,
-        (effective ?? parsed).layers.map((layer) => layer.color),
+        source,
+        source.layers.map((layer) => layer.color),
       );
 
       const id = await saveProject({
@@ -631,6 +654,7 @@ export function Editor() {
   }, [
     parsed,
     effective,
+    revealed,
     svgText,
     user,
     assigned,
@@ -794,7 +818,7 @@ export function Editor() {
                 >
                   {effective && (
                     <ArtworkPreview
-                      parsed={cropping ? parsed : effective}
+                      parsed={cropping ? parsed : (revealed ?? effective)}
                       colors={cropping ? assignedColors : undefined}
                       highlightIndex={cropping ? null : hovered}
                     />
