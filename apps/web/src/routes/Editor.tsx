@@ -11,7 +11,10 @@ import { CropOverlay } from '../components/CropOverlay';
 import { cn } from '../lib/cn';
 import {
   averageColor,
+  documentOrder,
   groupLayersByColor,
+  moveGroup,
+  orderFromColors,
   parseSvgLayers,
   SvgParseError,
   type ParsedSvg,
@@ -88,6 +91,14 @@ export function Editor() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   /** Source-layer indices the user removed; excluded from every stage downstream. */
   const [deleted, setDeleted] = useState<Set<number>>(new Set());
+  /**
+   * Print order as source-layer indices, lowest first.
+   *
+   * A permutation rather than a reordered layer list, because `assigned` and
+   * `deleted` are both keyed by source index — shuffling the layers would mean
+   * remapping those in step, and a missed remap recolours the wrong region.
+   */
+  const [order, setOrder] = useState<number[]>([]);
   const [cropping, setCropping] = useState(false);
   /** Assigned colour per source layer, for previewing the uncropped artwork. */
   const assignedColors = useMemo(
@@ -126,16 +137,34 @@ export function Editor() {
    * so assigning two layers the same color genuinely produces one printed
    * layer rather than two at the same height.
    */
-  const groups = useMemo(() => {
+  /**
+   * Source-layer indices that survive to be printed, in print order.
+   *
+   * The single sequence everything below is derived from: the rows, the
+   * grouping, and the map back from a group to the layers behind it. Deriving
+   * those separately is what makes a reorder recolour the wrong region.
+   */
+  const keptSequence = useMemo(() => {
     if (!parsed) return [];
+    /*
+     * Walk the print order, not the parsed array: the stack the user arranged
+     * is what decides heights, and grouping in document order would hand
+     * buildMesh a different stack from the one on screen.
+     */
+    const sequence =
+      order.length === parsed.layers.length ? order : documentOrder(parsed.layers.length);
     // Deleted layers are dropped before grouping, so a merge of survivors
     // still produces one contiguous set of rows.
-    const kept = parsed.layers.filter((_, i) => !deleted.has(i));
-    const keptAssigned = parsed.layers
-      .map((layer, i) => assigned[i] ?? layer.color)
-      .filter((_, i) => !deleted.has(i));
-    return groupLayersByColor(kept, keptAssigned);
-  }, [parsed, assigned, deleted]);
+    return sequence.filter((i) => !deleted.has(i));
+  }, [parsed, order, deleted]);
+
+  const groups = useMemo(() => {
+    if (!parsed) return [];
+    return groupLayersByColor(
+      keptSequence.map((i) => parsed.layers[i]),
+      keptSequence.map((i) => assigned[i] ?? parsed.layers[i].color),
+    );
+  }, [parsed, assigned, keptSequence]);
 
   const effective = useMemo(
     () => (parsed ? { ...parsed, layers: groups } : null),
@@ -145,6 +174,18 @@ export function Editor() {
   const layers = useMemo(
     () => (effective ? layerAssignments(effective, config) : []),
     [effective, config],
+  );
+
+  /**
+   * Whether the stack has been moved away from the artwork's own order.
+   *
+   * Reset restores the stacking as well as the colours, so it has to be
+   * offered once the stacking alone has changed — otherwise a reorder is the
+   * one edit with no way back.
+   */
+  const reordered = useMemo(
+    () => order.some((sourceIndex, position) => sourceIndex !== position),
+    [order],
   );
 
   const reset = useCallback(() => {
@@ -161,6 +202,7 @@ export function Editor() {
     setAssigned([]);
     setSelected(new Set());
     setDeleted(new Set());
+    setOrder([]);
     setSvgText(null);
     setConfig((current) => ({ ...current, crop: FULL_CROP }));
     setCropping(false);
@@ -200,7 +242,9 @@ export function Editor() {
         setDeleted(new Set());
 
         const text = await file.text();
-        setParsed(parseSvgLayers(text));
+        const uploaded = parseSvgLayers(text);
+        setParsed(uploaded);
+        setOrder(documentOrder(uploaded.layers.length));
         setSvgText(text);
         setProjectId(null);
         setSavedAt(null);
@@ -270,19 +314,15 @@ export function Editor() {
   /**
    * Source-layer indices behind a merged group.
    *
-   * Grouping runs over the surviving layers, so a group's sourceIndices are
-   * positions in that filtered list — writing an assignment at those positions
-   * directly would recolour the wrong layers once anything is deleted.
+   * Grouping runs over the surviving layers in print order, so a group's
+   * sourceIndices are positions in that sequence — writing an assignment at
+   * those positions directly would recolour the wrong layers the moment
+   * anything is deleted or moved.
    */
   const sourceIndicesOf = useCallback(
-    (groupIndex: number): number[] => {
-      if (!parsed) return [];
-      const keptToSource = parsed.layers
-        .map((_, i) => i)
-        .filter((i) => !deleted.has(i));
-      return (groups[groupIndex]?.sourceIndices ?? []).map((i) => keptToSource[i]);
-    },
-    [parsed, groups, deleted],
+    (groupIndex: number): number[] =>
+      (groups[groupIndex]?.sourceIndices ?? []).map((i) => keptSequence[i]),
+    [groups, keptSequence],
   );
 
   /** Writes an assignment for every source layer folded into group `groupIndex`. */
@@ -346,14 +386,44 @@ export function Editor() {
     setStale(true);
   }, [parsed, selected, groups, assigned, sourceIndicesOf]);
 
+  /**
+   * Moves a merged group one position up or down the printed stack.
+   *
+   * Deleted layers ride along at the end of the permutation: they have no
+   * height while deleted, and Reset — the only way back — restores document
+   * order for everything at once.
+   */
+  const moveLayer = useCallback(
+    (groupIndex: number, delta: -1 | 1) => {
+      const target = groupIndex + delta;
+      if (!parsed || target < 0 || target >= groups.length) return;
+
+      setOrder(
+        moveGroup(
+          // Group members as source indices, which is the space `order` is in.
+          groups.map((group) => group.sourceIndices.map((i) => keptSequence[i])),
+          groupIndex,
+          target,
+          documentOrder(parsed.layers.length).filter((i) => deleted.has(i)),
+        ),
+      );
+      setSelected(new Set());
+      setHovered(null);
+      setStale(true);
+    },
+    [parsed, groups, deleted, keptSequence],
+  );
+
   const resetColors = useCallback(() => {
     setAssigned([]);
     setSelected(new Set());
     // Reset restores deleted layers too: it is the one way back to the artwork
     // as uploaded, and leaving deletions behind would make that a lie.
     setDeleted(new Set());
+    // Including the stacking, for the same reason.
+    setOrder(parsed ? documentOrder(parsed.layers.length) : []);
     setStale(true);
-  }, []);
+  }, [parsed]);
 
   /*
    * Rebuild automatically when the layer set changes — merging, recolouring or
@@ -390,7 +460,7 @@ export function Editor() {
     // already covers that case; building here too would do the work twice.
     if (autoBuild) return;
     if (groupRef.current) generateRef.current();
-  }, [assigned, deleted, autoBuild]);
+  }, [assigned, deleted, order, autoBuild]);
 
   /*
    * Open a saved project from ?project=<id>.
@@ -452,6 +522,17 @@ export function Editor() {
         );
         setAssigned(restored.layers.map((layer) => byOriginal.get(layer.color) ?? layer.color));
 
+        /*
+         * Stacking is the saved array's own order, restored by colour for the
+         * same reason the assignments are.
+         */
+        setOrder(
+          orderFromColors(
+            restored.layers,
+            project.config.layers.map((layer) => layer.originalColor),
+          ),
+        );
+
         const removedColors = new Set(
           project.config.layers.filter((l) => l.deleted).map((l) => l.originalColor),
         );
@@ -493,7 +574,15 @@ export function Editor() {
 
     try {
       const colors = parsed.layers.map((layer, i) => assigned[i] ?? layer.color);
-      const thumbnailDataUrl = await renderThumbnail(parsed, colors);
+      /*
+       * From `effective`, not the parsed artwork: that is the merged, deleted
+       * and reordered stack the sign will actually be printed as, and a
+       * thumbnail of anything else is a picture of a sign nobody asked for.
+       */
+      const thumbnailDataUrl = await renderThumbnail(
+        effective ?? parsed,
+        (effective ?? parsed).layers.map((layer) => layer.color),
+      );
 
       const id = await saveProject({
         id: projectId ?? undefined,
@@ -508,8 +597,17 @@ export function Editor() {
           flatMode: config.flatMode ?? false,
           flatGapMm: config.flatGapMm ?? DEFAULT_FLAT_GAP_MM,
           cropRect: config.crop ?? FULL_CROP,
-          layers: parsed.layers.map((layer, i) => ({
-            originalColor: layer.color,
+          /*
+           * Written in print order — the array order *is* the stacking, which
+           * is how it comes back on open. Deleted layers stay in the document
+           * so their colour assignment survives, parked at the end where the
+           * permutation keeps them.
+           */
+          layers: [
+            ...keptSequence,
+            ...documentOrder(parsed.layers.length).filter((i) => deleted.has(i)),
+          ].map((i) => ({
+            originalColor: parsed.layers[i].color,
             assignedColor: colors[i],
             ...(deleted.has(i) ? { deleted: true } : {}),
           })),
@@ -530,7 +628,19 @@ export function Editor() {
     } finally {
       setSaving(false);
     }
-  }, [parsed, svgText, user, assigned, deleted, projectId, projectName, config, setSearchParams]);
+  }, [
+    parsed,
+    effective,
+    svgText,
+    user,
+    assigned,
+    deleted,
+    keptSequence,
+    projectId,
+    projectName,
+    config,
+    setSearchParams,
+  ]);
 
   const update = useCallback((patch: Partial<MeshConfig>) => {
     setConfig((current) => ({ ...current, ...patch }));
@@ -716,7 +826,7 @@ export function Editor() {
 
             <Panel
               title={`Layers · ${layers.length}`}
-              description="Lowest first. Recolor, delete, or select two or more to merge."
+              description="Lowest first. Reorder, recolor, delete, or select two or more to merge."
               actions={
                 <div className="flex shrink-0 gap-2">
                   <Button
@@ -727,7 +837,7 @@ export function Editor() {
                   >
                     Merge
                   </Button>
-                  {(assigned.length > 0 || deleted.size > 0) && (
+                  {(assigned.length > 0 || deleted.size > 0 || reordered) && (
                     <Button size="sm" variant="ghost" onClick={resetColors}>
                       Reset
                     </Button>
@@ -742,7 +852,14 @@ export function Editor() {
 
                   return (
                     <li
-                      key={`${layer.color}-${i}`}
+                      /*
+                        Keyed by colour, not position. Group colours are unique,
+                        so React moves the existing row rather than rewriting
+                        every row's contents — which is what keeps focus on the
+                        button you just pressed, so a layer can be walked up the
+                        stack with repeated presses.
+                      */
+                      key={layer.color}
                       onMouseEnter={() => setHovered(i)}
                       onMouseLeave={() => setHovered(null)}
                       className={cn(
@@ -791,6 +908,53 @@ export function Editor() {
 
                       <span className="shrink-0 font-mono text-xs tabular-nums text-chalk">
                         {layer.heightMm.toFixed(2)} mm
+                      </span>
+
+                      {/*
+                        One fused part with a hairline seam rather than two
+                        floating icons — the same drafting register the rest of
+                        the chrome speaks in.
+
+                        It keeps its exact size at both ends of the stack,
+                        fading instead of disappearing. A control that vanishes
+                        reflows every row beneath it mid-move, which is the way
+                        reorder lists usually go wrong.
+                      */}
+                      <span className="flex shrink-0 flex-col overflow-hidden rounded-[2px] border border-rule">
+                        {([-1, 1] as const).map((delta) => (
+                          <button
+                            key={delta}
+                            type="button"
+                            aria-label={`Move layer ${layer.color} ${
+                              delta === -1 ? 'down' : 'up'
+                            } the stack`}
+                            title={
+                              delta === -1
+                                ? 'Print this layer lower'
+                                : 'Print this layer higher'
+                            }
+                            disabled={delta === -1 ? i === 0 : i === layers.length - 1}
+                            onClick={() => moveLayer(i, delta)}
+                            className={cn(
+                              'flex h-[11px] w-5 items-center justify-center text-graphite transition-colors',
+                              'hover:bg-bench-2 hover:text-chalk',
+                              delta === 1 && 'border-t border-rule',
+                              'disabled:cursor-not-allowed disabled:opacity-30',
+                              'disabled:hover:bg-transparent disabled:hover:text-graphite',
+                            )}
+                          >
+                            <svg viewBox="0 0 10 6" className="w-2" aria-hidden="true">
+                              <path
+                                d={delta === -1 ? 'M1 1.5l4 3 4-3' : 'M1 4.5l4-3 4 3'}
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </button>
+                        ))}
                       </span>
 
                       <button

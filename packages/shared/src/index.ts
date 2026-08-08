@@ -5,6 +5,11 @@
  * deliberately: order is the array index, and merging is expressed by two
  * layers sharing an `assignedColor` — the rule §5.4 already defines. Storing
  * either separately would be duplicate state that can disagree with itself.
+ *
+ * That array index is the *print* order, lowest layer first, which the user
+ * arranges and which decides each layer's height. Deleted layers are parked at
+ * the end. It is restored by matching `originalColor` rather than by position,
+ * for the same reason the assignments are.
  */
 export interface LayerConfig {
   /** Fill colour as it appeared in the source SVG, as `#rrggbb`. */

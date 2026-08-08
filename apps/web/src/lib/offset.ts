@@ -101,6 +101,65 @@ function areaOf(ring: IntPoint[]): number {
 }
 
 /**
+ * Resolves self-intersections in each shape, returning clean rings.
+ *
+ * Earcut — which three uses for every extrusion cap — is only defined on simple
+ * polygons. Hand it an outline that crosses itself and it does not fail; it
+ * emits overlapping triangles that bridge the crossings, which shows up as a
+ * thin membrane webbed across a glyph's concave notches. Wide letters are the
+ * usual victims because their diagonals are where a font's strokes overlap.
+ *
+ * Self-crossing outlines are not malformed art. A renderer fills them by the
+ * fill rule and they look correct in every browser and design tool, so the file
+ * gives no hint that anything is wrong until the mesh is built. Real exports
+ * carry them routinely: text converted to paths overlaps its own strokes at the
+ * joins.
+ *
+ * Clipper's nonZero union rewrites such a ring as the region the fill rule says
+ * it covers, which is both what the artwork looked like and something earcut
+ * can triangulate. Only the doubly-covered slivers are lost — a fraction of a
+ * percent of the area, and area that was never really there twice.
+ */
+export function repairShapes(shapes: THREE.Shape[]): THREE.Shape[] {
+  const result: THREE.Shape[] = [];
+
+  for (const shape of shapes) {
+    const { shape: outline, holes } = shape.extractPoints(1);
+    if (outline.length < 3) {
+      result.push(shape);
+      continue;
+    }
+
+    /*
+     * Absolute winding, not winding relative to the outline: a self-crossing
+     * ring's signed area is the difference of its lobes and can be near zero,
+     * so it cannot be trusted to orient anything else. Forcing outers positive
+     * and holes negative keeps the nonZero rule meaningful either way.
+     */
+    const paths = [orient(toPath(outline), true), ...holes.map((h) => orient(toPath(h), false))];
+    JS.ScaleUpPaths(paths, SCALE);
+
+    const clipper = new Clipper();
+    clipper.AddPaths(paths, PolyType.ptSubject, true);
+
+    const tree = new PolyTree();
+    if (
+      !clipper.Execute(ClipType.ctUnion, tree, PolyFillType.pftNonZero, PolyFillType.pftNonZero)
+    ) {
+      result.push(shape);
+      continue;
+    }
+
+    // A shape that resolves to nothing is likelier to be a Clipper edge case
+    // than genuinely empty artwork, so the original survives.
+    const fixed = shapesFromTree(tree);
+    result.push(...(fixed.length > 0 ? fixed : [shape]));
+  }
+
+  return result;
+}
+
+/**
  * Unions overlapping shapes into non-overlapping outlines.
  *
  * The flat-mode backing slab is built from every colour's regions, and in real
@@ -231,6 +290,25 @@ export function intersectShapes(subject: THREE.Shape[], clip: THREE.Shape[]): TH
   }
 
   return shapesFromTree(tree);
+}
+
+/**
+ * Total area a set of shapes covers, holes discounted.
+ *
+ * Used to ask whether anything of a layer survives being covered. Shapes are
+ * assumed already disjoint, which is what the clipping functions here return.
+ */
+export function shapesArea(shapes: THREE.Shape[]): number {
+  let total = 0;
+
+  for (const shape of shapes) {
+    const { shape: outline, holes } = shape.extractPoints(1);
+    total +=
+      Math.abs(areaOf(toPath(outline))) -
+      holes.reduce((sum, hole) => sum + Math.abs(areaOf(toPath(hole))), 0);
+  }
+
+  return total;
 }
 
 /** Axis-aligned rectangle as a shape, for clipping. */

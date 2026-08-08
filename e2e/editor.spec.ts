@@ -314,7 +314,9 @@ test.describe('flat mode (§5.5)', () => {
   const enableFlat = (page: Page) =>
     page.locator('label:has-text("Flat mesh") input[type=checkbox]').check();
 
-  test('puts every layer at one height', async ({ page }) => {
+  test('puts the base at the bottom and every colour above it at one height', async ({
+    page,
+  }) => {
     await upload(page, 'sign-4-colors.svg');
     const rows = page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
 
@@ -324,11 +326,16 @@ test.describe('flat mode (§5.5)', () => {
 
     await enableFlat(page);
 
+    /*
+     * Two heights, not one: the lowest layer is the base the sign prints on,
+     * and every colour above it reaches the same single step. Giving the base
+     * that step too stacked the background on top of itself.
+     */
     const heights = await rows.evaluateAll((els) =>
       els.map((e) => e.textContent?.match(/[\d.]+ mm/)?.[0]),
     );
-    expect(new Set(heights).size).toBe(1);
-    expect(heights[0]).toBe('2.40 mm');
+    expect(heights[0]).toBe('2.00 mm');
+    expect(new Set(heights.slice(1))).toEqual(new Set(['2.40 mm']));
   });
 
   test('reveals the channel control and relabels the step field', async ({ page }) => {
@@ -615,5 +622,111 @@ test.describe('degenerate builds', () => {
     await expect(page.getByText(/triangles/)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /download 3mf/i })).toBeDisabled();
     await expect(page.getByRole('button', { name: /download stl/i })).toBeDisabled();
+  });
+});
+
+
+test.describe('layer order', () => {
+  const rows = (page: Page) => page.locator('li').filter({ hasText: /#[0-9a-f]{6}/i });
+  const colours = (page: Page) =>
+    rows(page).evaluateAll((els) => els.map((e) => e.textContent?.match(/#[0-9a-f]{6}/i)?.[0]));
+
+  const move = (page: Page, colour: string, direction: 'up' | 'down') =>
+    page.getByRole('button', { name: `Move layer ${colour} ${direction} the stack` }).click();
+
+  test('moves a layer up the stack and reassigns the heights', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+
+    const before = await colours(page);
+    // Heights follow position, so the layer that moves takes the other's.
+    await expect(rows(page).first()).toContainText('2.00 mm');
+
+    await move(page, before[0]!, 'up');
+
+    const after = await colours(page);
+    expect(after[0]).toBe(before[1]);
+    expect(after[1]).toBe(before[0]);
+    await expect(rows(page).nth(1)).toContainText('2.40 mm');
+  });
+
+  test('moves a layer back down again', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const before = await colours(page);
+
+    await move(page, before[0]!, 'up');
+    await move(page, before[0]!, 'down');
+
+    expect(await colours(page)).toEqual(before);
+  });
+
+  /*
+   * A control that disappears at the ends reflows every row beneath it
+   * mid-move, which is the usual way reorder lists go wrong.
+   */
+  test('disables the ends of the stack rather than hiding the control', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const list = await colours(page);
+
+    await expect(
+      page.getByRole('button', { name: `Move layer ${list[0]} down the stack` }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole('button', { name: `Move layer ${list.at(-1)} up the stack` }),
+    ).toBeDisabled();
+  });
+
+  test('keeps focus on the moved layer so it can be walked up the stack', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const first = (await colours(page))[0]!;
+
+    await page.getByRole('button', { name: `Move layer ${first} up the stack` }).focus();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+
+    // Two presses of one key must move the same layer twice, not two layers once.
+    expect((await colours(page))[2]).toBe(first);
+  });
+
+  test('rebuilds the mesh without pressing the button', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await generate(page);
+
+    const before = (await page.getByText(/triangles/).textContent()) ?? '';
+    await move(page, (await colours(page))[0]!, 'up');
+
+    // Reordering changes every height above the move, so the old mesh would
+    // contradict the layer list beside it.
+    await expect(page.getByText(/regenerate to apply/i)).toHaveCount(0);
+    await expect(page.getByText(/triangles/)).not.toHaveText(before);
+  });
+
+  test('restores document order on reset', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    const before = await colours(page);
+
+    await move(page, before[0]!, 'up');
+    await page.getByRole('button', { name: 'Reset' }).click();
+
+    expect(await colours(page)).toEqual(before);
+  });
+
+  /*
+   * The case this was built for: a layer ordered under something that covers
+   * it completely is cut out of it, so it reads as engraved rather than being
+   * printed sealed inside the sign where nobody can see it.
+   */
+  test('cuts a buried layer out of the layer covering it', async ({ page }) => {
+    await upload(page, 'sign-4-colors.svg');
+    await generate(page);
+
+    const before = (await page.getByText(/triangles/).textContent()) ?? '';
+    const list = await colours(page);
+
+    // Send the topmost colour to the bottom, under the background it sits on.
+    for (let i = list.length - 1; i > 0; i--) await move(page, list.at(-1)!, 'down');
+
+    // Holes cost triangles: the covering layer gains an outline it did not have.
+    await expect(page.getByText(/triangles/)).not.toHaveText(before);
+    await expect(page.getByText(/could not be built/i)).toHaveCount(0);
   });
 });

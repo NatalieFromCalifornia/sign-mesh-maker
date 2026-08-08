@@ -25,6 +25,21 @@ export const OVERLAPPING_SAME_COLOR_SVG = `<svg xmlns="http://www.w3.org/2000/sv
   <circle cx="65" cy="30" r="25" fill="#ffffff"/>
 </svg>`;
 
+/**
+ * One path whose outline doubles back across itself.
+ *
+ * This is what text converted to paths produces where a font's strokes overlap
+ * at a join, and it renders correctly everywhere — a renderer just applies the
+ * fill rule, so the file looks fine and gives no warning. Earcut has no fill
+ * rule, and webs the crossings over with extra triangles: on a real sign that
+ * arrived as a membrane stretched across the wide letters.
+ *
+ * As drawn the ring sweeps 5000 units² with 1200 of that covered twice.
+ */
+export const SELF_INTERSECTING_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 50">
+  <path fill="#010101" d="M 0 0 L 60 0 L 60 40 L 20 40 L 20 10 L 80 10 L 80 50 L 0 50 Z"/>
+</svg>`;
+
 /** Strokes only — nothing fillable, so parsing must fail with a clear message. */
 export const STROKE_ONLY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <path d="M 10 10 L 90 90" fill="none" stroke="#000000" stroke-width="4"/>

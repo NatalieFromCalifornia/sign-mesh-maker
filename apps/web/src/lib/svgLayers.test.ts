@@ -3,7 +3,10 @@ import * as THREE from 'three';
 import {
   averageColor,
   colorDistance,
+  documentOrder,
   groupLayersByColor,
+  moveGroup,
+  orderFromColors,
   parseSvgLayers,
   resolveFill,
   shapeToPathData,
@@ -13,6 +16,7 @@ import {
   CAIRO_PERCENT_SVG,
   HEX_SIGN_SVG,
   OVERLAPPING_SAME_COLOR_SVG,
+  SELF_INTERSECTING_SVG,
   STROKE_ONLY_SVG,
 } from '../test/fixtures';
 
@@ -92,6 +96,40 @@ describe('parseSvgLayers', () => {
     expect(parsed.layers[0].shapes.length).toBe(2);
   });
 
+  /*
+   * Regression: a real sign came back with a membrane webbed across its wide
+   * letters. The glyph outlines crossed themselves — legal SVG that every
+   * renderer fills correctly — and earcut, which has no fill rule, bridged the
+   * crossings with overlapping triangles. Repairing at parse time means the
+   * previews and the mesh all see the same simple polygons.
+   */
+  it('resolves self-crossing outlines into polygons three can triangulate', () => {
+    const parsed = parseSvgLayers(SELF_INTERSECTING_SVG);
+    const shapes = parsed.layers.flatMap((layer) => layer.shapes);
+
+    let enclosed = 0;
+    let covered = 0;
+    for (const shape of shapes) {
+      const { shape: outline, holes } = shape.extractPoints(1);
+      enclosed += Math.abs(THREE.ShapeUtils.area(outline));
+
+      const faces = THREE.ShapeUtils.triangulateShape(outline, holes as THREE.Vector2[][]);
+      const points = [...outline, ...holes.flat()];
+      for (const [a, b, c] of faces) {
+        const p = points[a];
+        const q = points[b];
+        const r = points[c];
+        covered += Math.abs((q.x - p.x) * (r.y - p.y) - (r.x - p.x) * (q.y - p.y)) / 2;
+      }
+    }
+
+    // The membrane is triangles covering ground the outline never enclosed.
+    expect(covered / enclosed).toBeCloseTo(1, 3);
+    // The doubly-swept sliver is counted once, not twice or not at all.
+    expect(enclosed).toBeGreaterThan(3000);
+    expect(enclosed).toBeLessThan(5000);
+  });
+
   it('rejects artwork with nothing fillable', () => {
     expect(() => parseSvgLayers(STROKE_ONLY_SVG)).toThrow(SvgParseError);
   });
@@ -165,3 +203,77 @@ describe('groupLayersByColor', () => {
   });
 });
 
+
+describe('moveGroup', () => {
+  // Stacks are given as the source-layer indices behind each printed group.
+  const stack = [[0], [1], [2]];
+
+  it('moves a group one position up the stack', () => {
+    expect(moveGroup(stack, 0, 1)).toEqual([1, 0, 2]);
+  });
+
+  it('moves a group one position down', () => {
+    expect(moveGroup(stack, 2, 1)).toEqual([0, 2, 1]);
+  });
+
+  /*
+   * A merged group prints as one layer at one height, so its members have to
+   * travel together — splitting them would quietly undo the merge.
+   */
+  it('keeps the layers of a merged group together', () => {
+    const merged = [[0], [1, 3, 4], [2]];
+    expect(moveGroup(merged, 1, 0)).toEqual([1, 3, 4, 0, 2]);
+  });
+
+  it('parks deleted layers at the end', () => {
+    expect(moveGroup(stack, 0, 2, [7, 9])).toEqual([1, 2, 0, 7, 9]);
+  });
+
+  it('leaves the stack alone when the move goes nowhere', () => {
+    expect(moveGroup(stack, 1, 1)).toEqual([0, 1, 2]);
+    expect(moveGroup(stack, 0, -1)).toEqual([0, 1, 2]);
+    expect(moveGroup(stack, 0, 3)).toEqual([0, 1, 2]);
+  });
+
+  it('does not mutate the stack it was given', () => {
+    const original = [[0], [1]];
+    moveGroup(original, 0, 1);
+    expect(original).toEqual([[0], [1]]);
+  });
+});
+
+describe('orderFromColors', () => {
+  const layers = [
+    { color: '#efebe4', shapes: [] },
+    { color: '#ad130f', shapes: [] },
+    { color: '#ffffff', shapes: [] },
+  ];
+
+  it('restores a saved stacking by colour, not by position', () => {
+    expect(orderFromColors(layers, ['#ffffff', '#efebe4', '#ad130f'])).toEqual([2, 0, 1]);
+  });
+
+  /*
+   * Matched by colour for the same reason assignments are: the SVG is
+   * re-parsed on open, and a parser change that reorders layers would
+   * otherwise apply the saved stacking to the wrong ones.
+   */
+  it('ignores colours the artwork no longer has', () => {
+    expect(orderFromColors(layers, ['#ffffff', '#123456', '#efebe4'])).toEqual([2, 0, 1]);
+  });
+
+  it('keeps colours the save never mentioned, at the top', () => {
+    expect(orderFromColors(layers, ['#ffffff'])).toEqual([2, 0, 1]);
+  });
+
+  it('falls back to document order for an empty save', () => {
+    expect(orderFromColors(layers, [])).toEqual([0, 1, 2]);
+  });
+});
+
+describe('documentOrder', () => {
+  it('is the identity permutation', () => {
+    expect(documentOrder(4)).toEqual([0, 1, 2, 3]);
+    expect(documentOrder(0)).toEqual([]);
+  });
+});

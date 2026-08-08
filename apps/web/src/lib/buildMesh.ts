@@ -1,7 +1,14 @@
 import * as THREE from 'three';
-import type { ParsedSvg } from './svgLayers';
+import type { ParsedSvg, SvgLayer } from './svgLayers';
 import type { CropRect } from '@sign-mesh-maker/shared';
-import { insetShapes, intersectShapes, rectShape, subtractShapes, unionShapes } from './offset';
+import {
+  insetShapes,
+  intersectShapes,
+  rectShape,
+  shapesArea,
+  subtractShapes,
+  unionShapes,
+} from './offset';
 
 export interface MeshConfig {
   /** Finished width of the sign; height follows from the artwork's aspect. */
@@ -66,10 +73,86 @@ export interface LayerAssignment {
  * is identical.
  */
 export function layerHeight(index: number, config: MeshConfig): number {
-  // Flat mode puts every colour on one plane; §5.5 defines that as the base
-  // plus a single step, whatever the layer's position in the stack.
-  if (config.flatMode) return config.baseMm + config.layerMm;
+  /*
+   * Flat mode has exactly two heights: the lowest layer is the base the sign
+   * is printed on, and every colour above it reaches one step higher. §5.5
+   * describes that single step; treating the base as one more colour at that
+   * step made the background a layer standing on itself.
+   */
+  if (config.flatMode) return index === 0 ? config.baseMm : config.baseMm + config.layerMm;
   return config.baseMm + index * config.layerMm;
+}
+
+/**
+ * A layer counts as buried once this little of it is left showing, as a
+ * fraction of its own area.
+ *
+ * Not zero: clipping a region out of the thing covering it leaves slivers a
+ * few nanometres wide along shared edges, and artwork routinely has a colour
+ * poking a rounding error past the shape drawn over it. Neither is something
+ * anyone can see, let alone print.
+ */
+const BURIED_FRACTION = 0.005;
+
+function boxOf(shapes: THREE.Shape[]): THREE.Box2 {
+  const box = new THREE.Box2();
+  for (const shape of shapes) {
+    for (const point of shape.extractPoints(1).shape) box.expandByPoint(point);
+  }
+  return box;
+}
+
+/**
+ * Cuts a layer that nothing would show of out of the layers burying it.
+ *
+ * Layer order is print height: the last layer is the tallest, so where two
+ * overlap the higher one is what you see. Reordering can therefore hide a
+ * layer completely — move a caption under the panel it sits on and the panel
+ * simply swallows it, with the caption still printed, in colour, sealed inside
+ * the sign where nobody will ever see it.
+ *
+ * Subtracting the buried layer from everything above it opens a hole down to
+ * the buried layer's own height, so it reads as engraved into the layer that
+ * was covering it. That is the shape the artwork asked for, at the stacking the
+ * user asked for.
+ *
+ * Only layers that are *entirely* covered are treated this way, and that limit
+ * is the whole reason this is safe. Backgrounds are underneath everything by
+ * definition and overlap all of it; cutting on any overlap would subtract the
+ * background from every layer above and erase the sign. A background still
+ * shows in its margins, so it is never buried, and is never cut.
+ */
+export function revealBuriedLayers(layers: SvgLayer[]): SvgLayer[] {
+  if (layers.length < 2) return layers;
+
+  const result = layers.map((layer) => ({ ...layer, shapes: layer.shapes }));
+
+  for (let i = 0; i < result.length - 1; i++) {
+    const own = shapesArea(result[i].shapes);
+    if (own <= 0) continue;
+
+    const above = result.slice(i + 1).flatMap((layer) => layer.shapes);
+    if (above.length === 0) continue;
+
+    const showing = shapesArea(subtractShapes(result[i].shapes, unionShapes(above)));
+    if (showing > own * BURIED_FRACTION) continue;
+
+    /*
+     * Cut from the layers that actually overlap it. Passing an untouched layer
+     * through the clipper would re-tessellate geometry for no reason, and the
+     * bounding boxes settle most pairs without one.
+     */
+    const buried = boxOf(result[i].shapes);
+    for (let j = i + 1; j < result.length; j++) {
+      if (!boxOf(result[j].shapes).intersectsBox(buried)) continue;
+      result[j] = {
+        ...result[j],
+        shapes: subtractShapes(result[j].shapes, result[i].shapes),
+      };
+    }
+  }
+
+  return result;
 }
 
 export function layerAssignments(parsed: ParsedSvg, config: MeshConfig): LayerAssignment[] {
@@ -97,7 +180,15 @@ export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
    * describes the sign that will actually be printed rather than the artwork
    * it was cut from.
    */
-  const parsed = cropParsed(source, config.crop);
+  const cropped = cropParsed(source, config.crop);
+
+  /*
+   * Then open a hole for anything the stack would otherwise bury. This runs
+   * ahead of flat mode's own subtraction on purpose: that one cuts a layer
+   * back to what no later layer covers, which for a buried layer is nothing at
+   * all. Revealing first leaves it a hole to survive in.
+   */
+  const parsed: ParsedSvg = { ...cropped, layers: revealBuriedLayers(cropped.layers) };
 
   const scale = config.widthMm / parsed.width;
   const group = new THREE.Group();
@@ -168,6 +259,20 @@ export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
     const shapes = insetUnits > 0 ? insetShapes(exclusive, insetUnits) : exclusive;
 
     if (config.flatMode) {
+      /*
+       * The lowest layer *is* the base. The slab above already carries its
+       * colour and its thickness, so giving it a tile as well would stack the
+       * background on top of itself — a step of its own colour standing proud
+       * of the sign, with the artwork drawn on it at the same height.
+       *
+       * That leaves flat mode with the two layers it should have: the base the
+       * sign is printed on, and everything else one step above it. Folding a
+       * colour into the base is merging it with the lowest layer, which needs
+       * no separate mechanism — merged layers already share a colour and a
+       * height (§5.4).
+       */
+      if (index === 0) return;
+
       /*
        * Sit the colour on the slab rather than running it down to the bed.
        * Extruding from zero would put the tile and the slab in the same volume

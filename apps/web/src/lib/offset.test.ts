@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { insetShapes, subtractShapes, unionShapes } from './offset';
+import { insetShapes, repairShapes, subtractShapes, unionShapes } from './offset';
 
 function square(size: number, x = 0, y = 0): THREE.Shape {
   return new THREE.Shape([
@@ -193,5 +193,107 @@ describe('subtractShapes', () => {
   it('short-circuits an empty clip', () => {
     const shapes = [square(10)];
     expect(subtractShapes(shapes, [])).toBe(shapes);
+  });
+});
+
+/**
+ * Area actually covered by the triangles three would extrude, versus the area
+ * the outline encloses.
+ *
+ * Earcut is only defined on simple polygons. Given a self-crossing one it does
+ * not throw — it emits overlapping triangles that bridge the crossings, so the
+ * covered area exceeds the enclosed area. That ratio is the membrane, measured.
+ */
+function triangulatedRatio(shapes: THREE.Shape[]): number {
+  let enclosed = 0;
+  let covered = 0;
+
+  for (const shape of shapes) {
+    const { shape: outline, holes } = shape.extractPoints(1);
+    enclosed += area(shape) - holes.reduce((total, hole) => {
+      const ring = new THREE.Shape(hole);
+      return total + area(ring);
+    }, 0);
+
+    const faces = THREE.ShapeUtils.triangulateShape(outline, holes as THREE.Vector2[][]);
+    const points = [...outline, ...holes.flat()];
+    for (const [a, b, c] of faces) {
+      const p = points[a];
+      const q = points[b];
+      const r = points[c];
+      covered += Math.abs((q.x - p.x) * (r.y - p.y) - (r.x - p.x) * (q.y - p.y)) / 2;
+    }
+  }
+
+  return covered / enclosed;
+}
+
+describe('repairShapes', () => {
+  /*
+   * A bowtie is the cleanest statement of the problem: its lobes wind opposite
+   * ways, so the ring encloses a signed area of zero while plainly covering
+   * two triangles. Earcut divides by that nothing and produces geometry with
+   * no relation to the outline.
+   */
+  it('splits a bowtie into its two lobes', () => {
+    const bowtie = new THREE.Shape([
+      new THREE.Vector2(0, 0),
+      new THREE.Vector2(100, 60),
+      new THREE.Vector2(100, 0),
+      new THREE.Vector2(0, 60),
+    ]);
+
+    const repaired = repairShapes([bowtie]);
+
+    expect(repaired).toHaveLength(2);
+    // Each lobe is a triangle of base 100 and height 30.
+    const total = repaired.reduce((sum, shape) => sum + area(shape), 0);
+    expect(total).toBeCloseTo(3000, 1);
+    expect(triangulatedRatio(repaired)).toBeCloseTo(1, 3);
+  });
+
+  it('counts a doubled-back outline once instead of twice', () => {
+    const overlapping = new THREE.Shape(
+      [
+        [0, 0],
+        [60, 0],
+        [60, 40],
+        [20, 40],
+        [20, 10],
+        [80, 10],
+        [80, 50],
+        [0, 50],
+      ].map(([x, y]) => new THREE.Vector2(x, y)),
+    );
+
+    expect(triangulatedRatio([overlapping])).toBeGreaterThan(1.01);
+
+    const repaired = repairShapes([overlapping]);
+    expect(triangulatedRatio(repaired)).toBeCloseTo(1, 3);
+    // The sliver crossed twice is real area, but only once.
+    expect(repaired.reduce((sum, shape) => sum + area(shape), 0)).toBeLessThan(5000);
+  });
+
+  it('leaves a clean shape and its hole alone', () => {
+    const withHole = square(20);
+    withHole.holes.push(
+      new THREE.Path([
+        new THREE.Vector2(5, 5),
+        new THREE.Vector2(15, 5),
+        new THREE.Vector2(15, 15),
+        new THREE.Vector2(5, 15),
+      ]),
+    );
+
+    const [repaired] = repairShapes([withHole]);
+
+    expect(repaired.holes).toHaveLength(1);
+    expect(area(repaired)).toBeCloseTo(400, 3);
+    expect(boundsOf(repaired).max.x).toBeCloseTo(20, 3);
+  });
+
+  it('keeps a degenerate outline rather than dropping the layer', () => {
+    const sliver = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(1, 1)]);
+    expect(repairShapes([sliver])).toHaveLength(1);
   });
 });

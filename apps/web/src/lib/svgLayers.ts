@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
+import { repairShapes } from './offset';
 
 export interface SvgLayer {
   /** Fill color as `#rrggbb`, and the identity used to group regions. */
@@ -137,7 +138,15 @@ export function parseSvgLayers(svgText: string, curveDivisions = 24): ParsedSvg 
     // result of the parse that fails on decimal percentages.
     const color = resolveFill(style?.fill, path.color);
     const existing = byColor.get(color);
-    const flattened = shapes.map((shape) => flattenAndFlip(shape, curveDivisions));
+    /*
+     * Repaired at parse time, not at mesh time, so every consumer sees simple
+     * polygons: the on-screen preview, the crop, the offsetting flat mode does,
+     * and the extrusion. Fixing it later would leave the previews disagreeing
+     * with the mesh about what the artwork is.
+     */
+    const flattened = repairShapes(
+      shapes.map((shape) => flattenAndFlip(shape, curveDivisions)),
+    );
 
     if (existing) existing.push(...flattened);
     else byColor.set(color, flattened);
@@ -255,6 +264,72 @@ export function groupLayersByColor(layers: SvgLayer[], assigned: string[]): Laye
   });
 
   return [...groups.values()];
+}
+
+/**
+ * Print order as source-layer indices, lowest first.
+ *
+ * Order is kept as a permutation rather than by reordering the parsed layers
+ * themselves, because every other piece of per-layer state — assigned colours,
+ * deletions — is keyed by source index. Shuffling the layers would mean
+ * remapping all of it in step, and any missed remap silently recolours or
+ * deletes the wrong region.
+ */
+export function documentOrder(layerCount: number): number[] {
+  return Array.from({ length: layerCount }, (_, i) => i);
+}
+
+/**
+ * Print order after moving one merged group to another position in the stack.
+ *
+ * `stack` is the printed groups, each given as the source-layer indices behind
+ * it — whole groups move, not individual layers, because a merged group prints
+ * as one layer at one height and its members have to travel together.
+ *
+ * Deleted layers belong to no group, so they are passed in `trailing` and
+ * parked at the end. They have no height while deleted, and restoring them is
+ * Reset, which returns the whole stack to document order anyway.
+ */
+export function moveGroup(
+  stack: number[][],
+  from: number,
+  to: number,
+  trailing: number[] = [],
+): number[] {
+  const sequence = stack.map((group) => [...group]);
+
+  if (from >= 0 && to >= 0 && from < sequence.length && to < sequence.length && from !== to) {
+    const [moved] = sequence.splice(from, 1);
+    sequence.splice(to, 0, moved);
+  }
+
+  return [...sequence.flat(), ...trailing];
+}
+
+/**
+ * Print order restored from a saved project, matched by original colour.
+ *
+ * By colour rather than by position, for the same reason assignments are: the
+ * SVG is re-parsed on open, and a parser change that reorders layers would
+ * otherwise apply the saved stacking to the wrong ones. Colours a save does not
+ * mention keep their document position at the top, which is where a layer the
+ * artwork gained would have sat anyway.
+ */
+export function orderFromColors(layers: SvgLayer[], savedColors: string[]): number[] {
+  const placed = new Set<number>();
+  const order: number[] = [];
+
+  for (const color of savedColors) {
+    const index = layers.findIndex((layer, i) => !placed.has(i) && layer.color === color);
+    if (index >= 0) {
+      order.push(index);
+      placed.add(index);
+    }
+  }
+
+  for (let i = 0; i < layers.length; i++) if (!placed.has(i)) order.push(i);
+
+  return order;
 }
 
 /**

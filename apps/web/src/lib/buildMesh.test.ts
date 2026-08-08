@@ -7,8 +7,10 @@ import {
   isFullCrop,
   layerAssignments,
   layerHeight,
+  revealBuriedLayers,
   type MeshConfig,
 } from './buildMesh';
+import { shapesArea } from './offset';
 import { parseSvgLayers } from './svgLayers';
 import { HEX_SIGN_SVG } from '../test/fixtures';
 
@@ -88,16 +90,37 @@ describe('buildMesh', () => {
 describe('flat mode (§5.5)', () => {
   const FLAT: MeshConfig = { ...CONFIG, flatMode: true, flatGapMm: 0.4 };
 
-  it('puts every layer at one height instead of stepping', () => {
-    expect(layerHeight(0, FLAT)).toBeCloseTo(2.4, 6);
+  /*
+   * Two heights, not one and not a staircase: the lowest layer is the base the
+   * sign is printed on, and every colour above it reaches the same single step.
+   * Treating the base as one more colour at that step stacked the background on
+   * top of itself.
+   */
+  it('puts the base at the bottom and every colour above it at one height', () => {
+    expect(layerHeight(0, FLAT)).toBeCloseTo(2, 6);
+    expect(layerHeight(1, FLAT)).toBeCloseTo(2.4, 6);
     expect(layerHeight(3, FLAT)).toBeCloseTo(2.4, 6);
     expect(layerHeight(9, FLAT)).toBeCloseTo(2.4, 6);
   });
 
-  it('reports the same height for every layer in the sidebar', () => {
+  it('reports exactly two heights in the sidebar', () => {
     const parsed = parseSvgLayers(HEX_SIGN_SVG);
     const heights = layerAssignments(parsed, FLAT).map((l) => l.heightMm);
-    expect(new Set(heights).size).toBe(1);
+
+    expect(heights[0]).toBeCloseTo(FLAT.baseMm, 6);
+    expect(new Set(heights.slice(1)).size).toBe(1);
+    expect(new Set(heights).size).toBe(2);
+  });
+
+  it('does not give the base a tile standing on itself', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const { group } = buildMesh(parsed, FLAT);
+
+    // The slab carries the lowest layer's colour; a second mesh in that colour
+    // would be the background printed on top of the background.
+    const background = parsed.layers[0].color;
+    const inThatColor = group.children.filter((child) => child.name === background);
+    expect(inThatColor).toHaveLength(1);
   });
 
   it('is no taller than one step above the base', () => {
@@ -114,8 +137,15 @@ describe('flat mode (§5.5)', () => {
     const stepped = buildMesh(parsed, CONFIG);
     const flat = buildMesh(parsed, FLAT);
 
-    // One extra mesh: the slab beneath the inset colours.
-    expect(flat.group.children.length).toBe(stepped.group.children.length + 1);
+    /*
+     * Same count, not one more: flat mode gains the slab but loses the lowest
+     * layer's tile, because the slab is that layer.
+     */
+    expect(flat.group.children.length).toBe(stepped.group.children.length);
+
+    // And the slab really is underneath — it starts at the bed.
+    const box = new THREE.Box3().setFromObject(flat.group);
+    expect(box.min.z).toBeCloseTo(0, 5);
   });
 
   it('still sits on the bed', () => {
@@ -196,5 +226,106 @@ describe('crop (§5.3)', () => {
     const { group } = buildMesh(parsed, HALF);
     group.updateMatrixWorld(true);
     expect(new THREE.Box3().setFromObject(group).min.z).toBeCloseTo(0, 3);
+  });
+});
+
+describe('revealBuriedLayers', () => {
+  const rect = (x: number, y: number, w: number, h: number) =>
+    new THREE.Shape([
+      new THREE.Vector2(x, y),
+      new THREE.Vector2(x + w, y),
+      new THREE.Vector2(x + w, y + h),
+      new THREE.Vector2(x, y + h),
+    ]);
+
+  const layer = (color: string, ...shapes: THREE.Shape[]) => ({ color, shapes });
+
+  const area = (shapes: THREE.Shape[]) => shapesArea(shapes);
+
+  /*
+   * The case that prompted this: a caption ordered below the panel it sits on.
+   * Nothing of it shows, so the panel is cut to let it through and it reads as
+   * engraved rather than being printed sealed inside the sign.
+   */
+  it('cuts a wholly covered layer out of the layer burying it', () => {
+    const caption = layer('#ffffff', rect(20, 20, 20, 10));
+    const panel = layer('#ad130f', rect(0, 0, 100, 50));
+
+    const [revealed, cut] = revealBuriedLayers([caption, panel]);
+
+    // The caption itself is untouched — it is what shows through the hole.
+    expect(area(revealed.shapes)).toBeCloseTo(200, 3);
+    // The panel loses exactly the caption's footprint.
+    expect(area(cut.shapes)).toBeCloseTo(5000 - 200, 3);
+    expect(cut.shapes[0].holes).toHaveLength(1);
+  });
+
+  /*
+   * The limit that makes the rule safe. A background is underneath everything
+   * and overlaps all of it, so cutting on any overlap at all would subtract it
+   * from every layer above and leave nothing standing.
+   */
+  it('leaves a background alone, because its margins still show', () => {
+    const background = layer('#efebe4', rect(0, 0, 100, 50));
+    const text = layer('#010101', rect(20, 20, 20, 10));
+
+    const [bg, above] = revealBuriedLayers([background, text]);
+
+    expect(area(bg.shapes)).toBeCloseTo(5000, 3);
+    expect(area(above.shapes)).toBeCloseTo(200, 3);
+    expect(above.shapes[0].holes).toHaveLength(0);
+  });
+
+  it('leaves a partly covered layer alone', () => {
+    // Half on the panel, half hanging off it.
+    const straddling = layer('#ffffff', rect(80, 10, 40, 10));
+    const panel = layer('#ad130f', rect(0, 0, 100, 50));
+
+    const [, after] = revealBuriedLayers([straddling, panel]);
+    expect(area(after.shapes)).toBeCloseTo(5000, 3);
+  });
+
+  it('only cuts the layers that actually overlap', () => {
+    const buried = layer('#ffffff', rect(20, 20, 20, 10));
+    const panel = layer('#ad130f', rect(0, 0, 100, 50));
+    const elsewhere = layer('#2f9d8f', rect(200, 0, 10, 10));
+
+    const [, cutPanel, untouched] = revealBuriedLayers([buried, panel, elsewhere]);
+
+    expect(area(cutPanel.shapes)).toBeCloseTo(4800, 3);
+    expect(untouched.shapes[0]).toBe(elsewhere.shapes[0]);
+  });
+
+  it('passes a single layer straight through', () => {
+    const only = [layer('#ffffff', rect(0, 0, 10, 10))];
+    expect(revealBuriedLayers(only)).toBe(only);
+  });
+
+  it('reaches the buried layer through every layer stacked over it', () => {
+    const buried = layer('#ffffff', rect(20, 20, 20, 10));
+    const first = layer('#ad130f', rect(0, 0, 100, 50));
+    const second = layer('#010101', rect(10, 10, 60, 30));
+
+    const [, a, b] = revealBuriedLayers([buried, first, second]);
+
+    expect(a.shapes[0].holes).toHaveLength(1);
+    expect(b.shapes[0].holes).toHaveLength(1);
+  });
+
+  it('opens the hole all the way down in the built mesh', () => {
+    const parsed = {
+      layers: [layer('#ffffff', rect(20, 20, 20, 10)), layer('#ad130f', rect(0, 0, 100, 50))],
+      width: 100,
+      height: 50,
+      bounds: new THREE.Box2(new THREE.Vector2(0, 0), new THREE.Vector2(100, 50)),
+    };
+
+    const { group } = buildMesh(parsed, CONFIG);
+    const panel = group.children.find((child) => child.name === '#ad130f') as THREE.Mesh;
+
+    // The buried colour is shorter, so the hole has to run the panel's full
+    // height for it to be visible from above.
+    const box = new THREE.Box3().setFromObject(panel);
+    expect(box.max.z).toBeCloseTo(layerHeight(1, CONFIG), 5);
   });
 });
