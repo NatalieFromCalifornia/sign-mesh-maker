@@ -248,3 +248,76 @@ describe('buildProjectSettings', () => {
     ]);
   });
 });
+
+/**
+ * 3MF describes a surface through vertex indices, and a slicer reads the
+ * topology it is given rather than inferring one.
+ *
+ * Writing three fresh vertices per triangle declares a mesh in which no two
+ * triangles are joined — every edge belongs to one face, which is every edge
+ * non-manifold, and the model has to be repaired before it will slice. STL
+ * never showed it, because STL is a soup of loose triangles by definition and
+ * anything reading one welds by position.
+ */
+describe('indexed geometry', () => {
+  /** A closed box, so a correct writer must produce a closed surface. */
+  function box(): ExportPart {
+    const corners = [
+      [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+      [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
+    ];
+    const faces = [
+      [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
+      [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+      [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7],
+    ];
+    const positions: number[] = [];
+    for (const face of faces) for (const c of face) positions.push(...corners[c]);
+    return { color: '#2f9d8f', name: 'box', positions: new Float32Array(positions) };
+  }
+
+  const meshOf = (xml: string) => {
+    const vertices = [...xml.matchAll(/<vertex x="([^"]+)" y="([^"]+)" z="([^"]+)"\/>/g)];
+    const triangles = [...xml.matchAll(/<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"\/>/g)].map(
+      (m) => [Number(m[1]), Number(m[2]), Number(m[3])],
+    );
+    return { vertices, triangles };
+  };
+
+  it('shares one vertex between every triangle that meets there', () => {
+    const { vertices, triangles } = meshOf(buildModelXml([box()]));
+
+    // Eight corners, not thirty-six loose ones.
+    expect(vertices).toHaveLength(8);
+    expect(triangles).toHaveLength(12);
+
+    const distinct = new Set(vertices.map((v) => `${v[1]},${v[2]},${v[3]}`));
+    expect(distinct.size).toBe(vertices.length);
+  });
+
+  it('declares a closed surface, with every edge shared by two faces', () => {
+    const { triangles } = meshOf(buildModelXml([box()]));
+
+    const edges = new Map<string, number>();
+    for (const [a, b, c] of triangles) {
+      for (const [x, y] of [[a, b], [b, c], [c, a]]) {
+        const key = x < y ? `${x}|${y}` : `${y}|${x}`;
+        edges.set(key, (edges.get(key) ?? 0) + 1);
+      }
+    }
+
+    const unshared = [...edges.values()].filter((n) => n !== 2);
+    expect(unshared).toHaveLength(0);
+  });
+
+  it('drops a triangle whose corners round onto each other', () => {
+    // Two corners a nanometre apart land on one vertex, leaving no triangle.
+    const sliver: ExportPart = {
+      color: '#ffffff',
+      name: 'sliver',
+      positions: new Float32Array([0, 0, 0, 1e-6, 0, 0, 0, 1, 0]),
+    };
+
+    expect(meshOf(buildModelXml([sliver])).triangles).toHaveLength(0);
+  });
+});

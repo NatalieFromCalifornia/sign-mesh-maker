@@ -156,17 +156,46 @@ export function buildModelXml(parts: ExportPart[]): string {
       const triangles: string[] = [];
       const count = part.positions.length / 3;
 
-      for (let i = 0; i < count; i++) {
-        vertices.push(
-          `<vertex x="${num(part.positions[i * 3] - offset.x)}" y="${num(
-            part.positions[i * 3 + 1] - offset.y,
-          )}" z="${num(part.positions[i * 3 + 2] - offset.z)}"/>`,
-        );
-      }
-      // Non-indexed geometry: every three vertices are one triangle, already
-      // wound counter-clockwise as seen from outside.
+      /*
+       * Indexed geometry: one vertex per distinct position, shared by every
+       * triangle that meets there.
+       *
+       * 3MF describes a surface through those indices, and a slicer reads the
+       * topology it is given rather than inferring one. Writing three fresh
+       * vertices per triangle therefore declares a mesh in which no two
+       * triangles are joined — every edge belongs to exactly one face, which
+       * is every edge non-manifold, and the model needs repairing before it
+       * will slice. STL never showed it because STL is a soup of loose
+       * triangles by definition, so anything reading one welds by position.
+       *
+       * Keyed on the coordinates as they are written out, not as they are held
+       * in memory, so vertices the file cannot tell apart share one index
+       * instead of landing a rounding error away from each other.
+       */
+      const seen = new Map<string, number>();
+      const vertexIndex = (i: number): number => {
+        const key = `${num(part.positions[i * 3] - offset.x)} ${num(
+          part.positions[i * 3 + 1] - offset.y,
+        )} ${num(part.positions[i * 3 + 2] - offset.z)}`;
+
+        const existing = seen.get(key);
+        if (existing !== undefined) return existing;
+
+        const next = seen.size;
+        seen.set(key, next);
+        const [x, y, z] = key.split(' ');
+        vertices.push(`<vertex x="${x}" y="${y}" z="${z}"/>`);
+        return next;
+      };
+
+      // Already wound counter-clockwise as seen from outside.
       for (let i = 0; i < count; i += 3) {
-        triangles.push(`<triangle v1="${i}" v2="${i + 1}" v3="${i + 2}"/>`);
+        const a = vertexIndex(i);
+        const b = vertexIndex(i + 1);
+        const c = vertexIndex(i + 2);
+        // Two corners that round onto one another leave no triangle behind.
+        if (a === b || b === c || a === c) continue;
+        triangles.push(`<triangle v1="${a}" v2="${b}" v3="${c}"/>`);
       }
 
       return `    <object id="${index + 2}" type="model" pid="1" pindex="${index}">
