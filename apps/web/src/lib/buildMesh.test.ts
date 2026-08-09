@@ -12,7 +12,7 @@ import {
 } from './buildMesh';
 import { shapesArea } from './offset';
 import { parseSvgLayers } from './svgLayers';
-import { HEX_SIGN_SVG } from '../test/fixtures';
+import { HEX_SIGN_SVG, TEXT_ON_PANEL_SVG } from '../test/fixtures';
 
 const CONFIG: MeshConfig = { widthMm: 120, baseMm: 2, layerMm: 0.4 };
 
@@ -422,3 +422,97 @@ describe('overlapping volume', () => {
     expect(box.min.z).toBeCloseTo(0, 5);
   });
 });
+
+
+/**
+ * Every part is exported as its own mesh, so every part has to be closed.
+ *
+ * A plain STL escapes this — all the colours land in one solid a slicer will
+ * heal — but a 3MF hands each colour over separately, and an unclosed one
+ * slices into missing letters and floating-region warnings.
+ */
+describe('watertight parts', () => {
+  /** Boundary edges: an edge used by one triangle is a hole in the surface. */
+  function openEdges(geometry: THREE.BufferGeometry): number {
+    const p = geometry.getAttribute('position').array as ArrayLike<number>;
+    const counts = new Map<string, number>();
+
+    for (let t = 0; t < p.length / 9; t++) {
+      const i = t * 9;
+      // Exact identity, not a rounded bucket: shared vertices are written from
+      // the same coordinate, and rounding invents mismatches at bucket edges.
+      const k = [0, 1, 2].map((n) => `${p[i + n * 3]},${p[i + n * 3 + 1]},${p[i + n * 3 + 2]}`);
+      for (let e = 0; e < 3; e++) {
+        const a = k[e];
+        const b = k[(e + 1) % 3];
+        if (a === b) continue;
+        const edge = a < b ? `${a}|${b}` : `${b}|${a}`;
+        counts.set(edge, (counts.get(edge) ?? 0) + 1);
+      }
+    }
+
+    let open = 0;
+    for (const [, n] of counts) if (n === 1) open++;
+    return open;
+  }
+
+  const partsOf = (group: THREE.Group) =>
+    group.children.map((child) => ({
+      name: child.name,
+      open: openEdges((child as THREE.Mesh).geometry),
+    }));
+
+  /*
+   * Text on a panel is the case that broke it. Cutting the glyphs out of the
+   * background leaves holes whose baselines are exactly collinear, and earcut
+   * bridges those wrongly: the cap spans across several holes instead of
+   * following their edges, so the cap and the walls disagree about where the
+   * boundary is.
+   */
+  it('closes a background cut by glyphs sharing a baseline', () => {
+    const parsed = parseSvgLayers(TEXT_ON_PANEL_SVG);
+
+    for (const flatMode of [false, true]) {
+      const { group } = buildMesh(parsed, { ...CONFIG, flatMode });
+      for (const part of partsOf(group)) {
+        expect(`${part.name} open=${part.open}`).toBe(`${part.name} open=0`);
+      }
+    }
+  });
+
+  it('closes every part of an ordinary sign', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+
+    for (const flatMode of [false, true]) {
+      const { group } = buildMesh(parsed, { ...CONFIG, flatMode });
+      for (const part of partsOf(group)) {
+        expect(`${part.name} open=${part.open}`).toBe(`${part.name} open=0`);
+      }
+    }
+  });
+
+  it('leaves a region too small to print out of the mesh entirely', () => {
+    const speck = {
+      layers: [
+        { color: '#2f9d8f', shapes: [rectShape2(0, 0, 100, 50)] },
+        // 0.02 x 0.02 mm once scaled: a twentieth of a nozzle across.
+        { color: '#ffffff', shapes: [rectShape2(10, 10, 0.02, 0.02)] },
+      ],
+      width: 100,
+      height: 50,
+      bounds: new THREE.Box2(new THREE.Vector2(0, 0), new THREE.Vector2(100, 50)),
+    };
+
+    const { group } = buildMesh(speck, CONFIG);
+    expect(group.children.map((c) => c.name)).toEqual(['#2f9d8f']);
+  });
+});
+
+function rectShape2(x: number, y: number, w: number, h: number) {
+  return new THREE.Shape([
+    new THREE.Vector2(x, y),
+    new THREE.Vector2(x + w, y),
+    new THREE.Vector2(x + w, y + h),
+    new THREE.Vector2(x, y + h),
+  ]);
+}

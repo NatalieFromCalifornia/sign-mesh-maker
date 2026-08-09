@@ -850,7 +850,7 @@ export function Editor() {
 
             <Panel
               title={`Layers · ${layers.length}`}
-              description="Top of the stack first. Reorder, recolor, delete, or select two or more to merge."
+              description="Top of the stack first. Reorder, recolor, or delete."
             >
               <ul className="flex flex-col">
                 {/*
@@ -1001,30 +1001,39 @@ export function Editor() {
               </ul>
 
               {/*
-                Below the list, left-aligned, Merge first.
+                Below the list, with Merge pinned to the right.
                 
                 These sat in the panel header, which right-aligns its actions —
                 so Reset appearing shoved Merge sideways, and the button moved
                 out from under the cursor exactly when a layer had just been
-                selected. Anchored to the left with Merge first, Reset extends
-                the row rightward instead and Merge never moves. Merge is always
-                rendered, disabled until there is something to merge, so the row
-                does not change height either.
+                selected. Pinning Merge to the corner keeps it still: Reset
+                comes and goes at the far end of the row, and the count beside
+                Merge is always rendered, so nothing reflows in either axis.
               */}
-              <div className="mt-4 flex flex-wrap gap-2 border-t border-rule pt-4">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={selected.size < 2}
-                  onClick={mergeSelected}
-                >
-                  Merge
-                </Button>
+              <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-rule pt-4">
                 {(assigned.length > 0 || deleted.size > 0 || reordered) && (
                   <Button size="sm" variant="ghost" onClick={resetColors}>
                     Reset
                   </Button>
                 )}
+                <div className="ml-auto flex items-center gap-3">
+                  {/*
+                    What Merge needs, next to Merge. This lived in the panel
+                    description at the top, a whole layer list away from the
+                    button it was explaining.
+                  */}
+                  <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-graphite">
+                    {selected.size < 2 ? 'Select two or more' : `${selected.size} selected`}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={selected.size < 2}
+                    onClick={mergeSelected}
+                  >
+                    Merge
+                  </Button>
+                </div>
               </div>
             </Panel>
 

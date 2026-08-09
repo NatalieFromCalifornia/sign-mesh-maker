@@ -76,3 +76,19 @@ export const CAPTION_ON_PANEL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" vie
   <rect x="40" y="20" width="120" height="60" fill="#ad130f"/>
   <rect x="70" y="40" width="60" height="20" fill="#ffffff"/>
 </svg>`;
+
+/**
+ * A panel with a row of glyph-like blocks sharing one baseline.
+ *
+ * Cutting them out of the background leaves it with several holes whose
+ * bottom edges are *exactly* collinear, which is the arrangement earcut
+ * bridges wrongly — it spans the cap across the holes instead of following
+ * their edges, and the extrusion comes out with a hole in it. Real text does
+ * this on every line it sets.
+ */
+export const TEXT_ON_PANEL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100">
+  <rect x="0" y="0" width="300" height="100" fill="#e5dac5"/>
+  <rect x="20" y="30" width="60" height="40" fill="#102132"/>
+  <rect x="120" y="30" width="60" height="40" fill="#102132"/>
+  <rect x="220" y="30" width="60" height="40" fill="#102132"/>
+</svg>`;

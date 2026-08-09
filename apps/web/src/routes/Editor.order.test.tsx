@@ -226,12 +226,31 @@ describe('layer actions', () => {
     const before = merge();
     await user.click(moveButton('#2f9d8f', 'up'));
 
-    // Reset has appeared, and Merge is the very same element, still ahead of it.
+    // Reset appears at the far end of the row, behind Merge, so the corner
+    // Merge is pinned to does not move.
     expect(reset()).toBeInTheDocument();
     expect(merge()).toBe(before);
     expect(
-      merge().compareDocumentPosition(reset()!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      merge().compareDocumentPosition(reset()!) & Node.DOCUMENT_POSITION_PRECEDING,
     ).toBeTruthy();
+  });
+
+  it('explains what Merge needs, next to Merge', async () => {
+    const user = await uploadArtwork();
+
+    // The count is always rendered, so the row never changes height.
+    const hint = () => screen.getByText(/select two or more|\d+ selected/i);
+    expect(hint()).toHaveTextContent(/select two or more/i);
+
+    // One is not enough, so the instruction stands rather than reporting a
+    // count and leaving the disabled button unexplained.
+    await user.click(screen.getByLabelText('Select layer #2f9d8f'));
+    expect(hint()).toHaveTextContent(/select two or more/i);
+    expect(merge()).toBeDisabled();
+
+    await user.click(screen.getByLabelText('Select layer #f2681c'));
+    expect(hint()).toHaveTextContent(/2 selected/i);
+    expect(merge()).toBeEnabled();
   });
 
   it('puts the actions below the layer list', async () => {

@@ -73,5 +73,12 @@ declare module 'clipper-lib' {
       clipFillType?: PolyFillType,
     ): boolean;
     Clear(): void;
+
+    /**
+     * Drops vertices that sit within `distance` of the edge through their
+     * neighbours — the near-duplicate and near-collinear points a boolean
+     * operation leaves along a shared edge.
+     */
+    static CleanPolygon(path: IntPoint[], distance?: number): IntPoint[];
   }
 }

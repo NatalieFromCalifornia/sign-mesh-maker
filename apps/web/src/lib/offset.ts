@@ -144,6 +144,25 @@ export function strokeToShapes(
   return shapesFromTree(tree);
 }
 
+/**
+ * Removes the near-duplicate and near-collinear vertices a boolean operation
+ * leaves behind.
+ *
+ * Every cut along a shared edge deposits points a fraction of an integer
+ * apart. They describe no shape, but earcut — which triangulates the caps of
+ * every extrusion — is only reliable on a polygon without them, and when it
+ * gives up it returns a partial triangulation. The walls are built from the
+ * outline directly and so are always complete, which leaves the cap not
+ * meeting them: a solid with a hole in it.
+ *
+ * That does not show in a plain STL, where every colour lands in one solid a
+ * slicer can heal, but a 3MF hands each colour over as its own mesh and an
+ * unclosed one slices into missing letters and floating-region warnings.
+ */
+function clean(ring: IntPoint[]): IntPoint[] {
+  return Clipper.CleanPolygon(ring, CLEAN_DISTANCE);
+}
+
 /** Forces a ring counter-clockwise (positive area) or clockwise. */
 function orient(ring: IntPoint[], counterClockwise: boolean): IntPoint[] {
   const positive = areaOf(ring) > 0;
@@ -293,6 +312,17 @@ function addOriented(clipper: Clipper, shapes: THREE.Shape[], polyType: PolyType
   }
 }
 
+/**
+ * How close a vertex may sit to the edge through its neighbours before it is
+ * dropped, in scaled clipper units.
+ *
+ * 1.415 is Clipper's own default — just over one integer diagonal, so it only
+ * removes points that carry no shape at the resolution the arithmetic runs at.
+ * At SCALE that is a bit over a thousandth of an SVG unit, which is nanometres
+ * on a printed sign.
+ */
+const CLEAN_DISTANCE = 1.415;
+
 /** Converts a Clipper PolyTree into shapes, attaching holes to their outlines. */
 function shapesFromTree(tree: PolyTree): THREE.Shape[] {
   const result: THREE.Shape[] = [];
@@ -305,13 +335,13 @@ function shapesFromTree(tree: PolyTree): THREE.Shape[] {
         continue;
       }
 
-      const outer = [child.Contour()];
+      const outer = [clean(child.Contour())];
       JS.ScaleDownPaths(outer, SCALE);
       if (outer[0].length >= 3) {
         const shape = new THREE.Shape(outer[0].map((p) => new THREE.Vector2(p.X, p.Y)));
         for (const hole of child.Childs()) {
           if (!hole.IsHole()) continue;
-          const ring = [hole.Contour()];
+          const ring = [clean(hole.Contour())];
           JS.ScaleDownPaths(ring, SCALE);
           if (ring[0].length >= 3) {
             shape.holes.push(new THREE.Path(ring[0].map((p) => new THREE.Vector2(p.X, p.Y))));

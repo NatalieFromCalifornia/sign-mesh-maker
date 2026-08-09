@@ -178,6 +178,61 @@ export function revealBuriedLayers(layers: SvgLayer[]): SvgLayer[] {
   return result;
 }
 
+/**
+ * Nudges every vertex by a deterministic, invisibly small amount so the
+ * triangulator cannot hit an exact tie.
+ *
+ * Earcut — which caps every extrusion — bridges each hole to the outer ring by
+ * casting a ray, and that goes wrong when rings are *exactly* collinear with
+ * one another. Text on a panel does this constantly: cut a line of glyphs out
+ * of the background and every one of them has its baseline on the same
+ * horizontal line. The cap it returns then spans across several holes at once
+ * instead of following their edges, so the cap and the walls disagree about
+ * where the boundary is and the solid is left with a hole in it.
+ *
+ * That does not show in a plain STL, where every colour lands in one solid a
+ * slicer will happily heal, but a 3MF hands each colour over as its own mesh:
+ * an unclosed one slices into missing letters and floating-region warnings.
+ *
+ * The offset is hashed from the coordinates rather than the vertex's position
+ * in its ring, so a point shared by two layers is moved the same way in both
+ * and touching walls stay touching. It is applied only for triangulation, at
+ * a scale — a ten-thousandth of a millimetre on a finished sign — far below
+ * what a printer resolves or a float32 export even records.
+ */
+/**
+ * Smallest region worth extruding, in square millimetres.
+ *
+ * A tenth of a millimetre square, which is a quarter the width of a common
+ * nozzle in each direction — nothing at or below this can be printed. Boolean
+ * operations leave slivers this size along the edges they cut, and they arrive
+ * as a few hundred points enclosing almost no area, self-crossing, and
+ * impossible to triangulate into anything closed. Printing them is not an
+ * option, so the choice is between dropping them and exporting a broken mesh.
+ */
+const MIN_PRINTABLE_MM2 = 0.01;
+
+function breakTriangulationTies(shapes: THREE.Shape[], epsilon: number): THREE.Shape[] {
+  if (epsilon <= 0) return shapes;
+
+  const hash = (x: number, y: number, salt: number) => {
+    const h = Math.sin(x * 12.9898 + y * 78.233 + salt) * 43758.5453;
+    return (h - Math.floor(h) - 0.5) * epsilon;
+  };
+
+  const move = (points: THREE.Vector2[]) =>
+    points.map(
+      (p) => new THREE.Vector2(p.x + hash(p.x, p.y, 0), p.y + hash(p.x, p.y, 1.618)),
+    );
+
+  return shapes.map((shape) => {
+    const { shape: outline, holes } = shape.extractPoints(1);
+    const next = new THREE.Shape(move(outline));
+    for (const hole of holes) next.holes.push(new THREE.Path(move(hole)));
+    return next;
+  });
+}
+
 export function layerAssignments(parsed: ParsedSvg, config: MeshConfig): LayerAssignment[] {
   return parsed.layers.map((layer, i) => ({
     color: layer.color,
@@ -217,10 +272,24 @@ export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
   const group = new THREE.Group();
   let triangles = 0;
 
-  const addMesh = (shapes: THREE.Shape[], depth: number, color: string, zOffset = 0) => {
-    if (shapes.length === 0) return;
+  /*
+   * Relative to the artwork, so it means the same thing whatever units the
+   * file was drawn in. A ten-millionth of the sign's longest edge is a
+   * ten-thousandth of a millimetre at any size anyone prints.
+   */
+  const tieBreak = Math.max(parsed.width, parsed.height) * 1e-7;
 
-    const geometry = new THREE.ExtrudeGeometry(shapes, { depth, bevelEnabled: false });
+  /** Clipping debris, in the shapes' own units. */
+  const minArea = scale > 0 ? MIN_PRINTABLE_MM2 / (scale * scale) : 0;
+
+  const addMesh = (shapes: THREE.Shape[], depth: number, color: string, zOffset = 0) => {
+    const printable = shapes.filter((shape) => shapesArea([shape]) > minArea);
+    if (printable.length === 0) return;
+
+    const geometry = new THREE.ExtrudeGeometry(breakTriangulationTies(printable, tieBreak), {
+      depth,
+      bevelEnabled: false,
+    });
     geometry.scale(scale, scale, 1);
     if (zOffset !== 0) geometry.translate(0, 0, zOffset);
 
