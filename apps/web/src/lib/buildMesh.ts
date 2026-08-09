@@ -4,6 +4,7 @@ import type { CropRect } from '@sign-mesh-maker/shared';
 import {
   insetShapes,
   intersectShapes,
+  normalizeShapes,
   rectShape,
   shapesArea,
   subtractShapes,
@@ -361,10 +362,17 @@ export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
      * the overlap is two colours sharing one top face rather than one hiding
      * inside the other.
      */
+    /*
+     * Normalized when there is nothing above to cut against, because the
+     * clipping is what would otherwise have done it. The topmost layer never
+     * gets cut, and merging concatenates the shapes of every layer folded into
+     * it — two of which can overlap. Two overlapping solids in one mesh is
+     * what a slicer calls non-manifold.
+     */
     const exclusive =
       coverAbove[index].length > 0
         ? subtractShapes(layer.shapes, coverAbove[index])
-        : layer.shapes;
+        : normalizeShapes(layer.shapes);
 
     const shapes = insetUnits > 0 ? insetShapes(exclusive, insetUnits) : exclusive;
 

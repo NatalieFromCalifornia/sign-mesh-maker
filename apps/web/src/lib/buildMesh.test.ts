@@ -491,6 +491,34 @@ describe('watertight parts', () => {
     }
   });
 
+  /*
+   * Merging folds several layers into one, and nothing cuts the topmost layer
+   * against anything, so its shapes can arrive overlapping. This is the shape
+   * of the report: a flat sign merged down to three colours came back
+   * non-manifold.
+   */
+  it('closes a merged top layer whose own shapes overlap', () => {
+    const overlapping = {
+      layers: [
+        { color: '#2f9d8f', shapes: [rectShape2(0, 0, 100, 50)] },
+        {
+          color: '#ffffff',
+          shapes: [rectShape2(10, 10, 40, 30), rectShape2(30, 20, 40, 20)],
+        },
+      ],
+      width: 100,
+      height: 50,
+      bounds: new THREE.Box2(new THREE.Vector2(0, 0), new THREE.Vector2(100, 50)),
+    };
+
+    for (const flatMode of [false, true]) {
+      const { group } = buildMesh(overlapping, { ...CONFIG, flatMode, flatGapMm: 0.4 });
+      for (const part of partsOf(group)) {
+        expect(`${part.name} open=${part.open}`).toBe(`${part.name} open=0`);
+      }
+    }
+  });
+
   it('leaves a region too small to print out of the mesh entirely', () => {
     const speck = {
       layers: [

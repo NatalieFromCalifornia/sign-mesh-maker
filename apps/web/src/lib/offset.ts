@@ -20,9 +20,6 @@ import {
  */
 const SCALE = 1000;
 
-/** Below this area a ring has collapsed to nothing and is dropped. */
-const MIN_RING_AREA = 1e-7;
-
 function toPath(points: THREE.Vector2[]): IntPoint[] {
   return points.map((p) => ({ X: p.x, Y: p.y }));
 }
@@ -42,48 +39,93 @@ function toPath(points: THREE.Vector2[]): IntPoint[] {
  * geometry is the worst outcome available.
  */
 export function insetShapes(shapes: THREE.Shape[], amount: number): THREE.Shape[] {
-  if (amount <= 0) return shapes;
+  if (amount <= 0 || shapes.length === 0) return shapes;
 
-  const result: THREE.Shape[] = [];
-
+  /*
+   * Every ring of every shape offset in one operation, rather than each ring
+   * on its own.
+   *
+   * Ring by ring, nothing knows how the results nest. Insetting can split one
+   * region into several — a shape pinched in the middle becomes two — and the
+   * holes then have to be handed to whichever piece now contains them. Doing
+   * that by attaching every hole to every piece puts holes outside the outline
+   * they belong to, which is not a polygon at all: it extrudes into a
+   * self-intersecting solid that a slicer rejects as non-manifold.
+   *
+   * Offsetting the set together lets the clipper work it out. Correctly wound
+   * — outers positive, holes negative — a negative delta shrinks the solid and
+   * grows its holes in the same pass, and the tree it comes back as says
+   * exactly which ring sits inside which.
+   */
+  const paths: IntPoint[][] = [];
   for (const shape of shapes) {
     const { shape: outline, holes } = shape.extractPoints(1);
-
-    const outer = offsetRing(toPath(outline), -amount);
-    if (outer.length === 0) continue;
-
-    // Holes grow as the solid shrinks: the channel has to open on both sides
-    // of an edge, and a hole's boundary is an edge of the solid.
-    const grownHoles = holes.flatMap((hole) => offsetRing(toPath(hole), amount));
-
-    for (const ring of outer) {
-      const next = new THREE.Shape(ring.map((p) => new THREE.Vector2(p.X, p.Y)));
-      for (const hole of grownHoles) {
-        next.holes.push(new THREE.Path(hole.map((p) => new THREE.Vector2(p.X, p.Y))));
-      }
-      result.push(next);
+    if (outline.length < 3) continue;
+    paths.push(orient(toPath(outline), true));
+    for (const hole of holes) {
+      if (hole.length >= 3) paths.push(orient(toPath(hole), false));
     }
   }
+  if (paths.length === 0) return [];
 
-  return result;
-}
-
-function offsetRing(path: IntPoint[], delta: number): IntPoint[][] {
-  if (path.length < 3) return [];
-
-  const scaled = [path.map((p) => ({ X: p.X, Y: p.Y }))];
-  JS.ScaleUpPaths(scaled, SCALE);
+  JS.ScaleUpPaths(paths, SCALE);
 
   const offsetter = new ClipperOffset(2, 0.25);
   // jtMiter keeps corners sharp, which matters for the straight edges of
   // lettering; the miter limit stops spikes at very acute corners.
-  offsetter.AddPaths(scaled, JoinType.jtMiter, EndType.etClosedPolygon);
+  offsetter.AddPaths(paths, JoinType.jtMiter, EndType.etClosedPolygon);
 
   const solution: IntPoint[][] = [];
-  offsetter.Execute(solution, delta * SCALE);
-  JS.ScaleDownPaths(solution, SCALE);
+  offsetter.Execute(solution, -amount * SCALE);
+  if (solution.length === 0) return [];
 
-  return solution.filter((ring) => ring.length >= 3 && Math.abs(areaOf(ring)) > MIN_RING_AREA);
+  return nest(solution);
+}
+
+/**
+ * Rebuilds nesting from a flat set of rings, so holes end up on the outline
+ * that actually contains them.
+ */
+function nest(rings: IntPoint[][]): THREE.Shape[] {
+  const clipper = new Clipper();
+  clipper.AddPaths(rings, PolyType.ptSubject, true);
+
+  const tree = new PolyTree();
+  if (!clipper.Execute(ClipType.ctUnion, tree, PolyFillType.pftNonZero, PolyFillType.pftNonZero)) {
+    return [];
+  }
+
+  return shapesFromTree(tree);
+}
+
+/**
+ * Normalizes a set of shapes into disjoint, properly nested regions.
+ *
+ * What reaches the extruder has to be a well-formed polygon set: no two
+ * regions overlapping, every hole inside the outline that owns it. Most of the
+ * pipeline gets that for free, because the clipping operations return it — but
+ * the topmost layer is never cut against anything, and merging concatenates
+ * the shapes of every layer folded into it. Two of those can overlap, and two
+ * overlapping solids in one mesh is exactly what a slicer means by
+ * non-manifold.
+ */
+export function normalizeShapes(shapes: THREE.Shape[]): THREE.Shape[] {
+  if (shapes.length <= 1) return shapes;
+
+  const paths: IntPoint[][] = [];
+  for (const shape of shapes) {
+    const { shape: outline, holes } = shape.extractPoints(1);
+    if (outline.length < 3) continue;
+    paths.push(orient(toPath(outline), true));
+    for (const hole of holes) {
+      if (hole.length >= 3) paths.push(orient(toPath(hole), false));
+    }
+  }
+  if (paths.length === 0) return [];
+
+  JS.ScaleUpPaths(paths, SCALE);
+  const nested = nest(paths);
+  return nested.length > 0 ? nested : shapes;
 }
 
 /**

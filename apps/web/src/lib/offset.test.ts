@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
   insetShapes,
+  normalizeShapes,
   repairShapes,
   shapesArea,
   strokeToShapes,
@@ -352,5 +353,95 @@ describe('strokeToShapes', () => {
   it('has nothing to draw for a zero width or a single point', () => {
     expect(strokeToShapes(squareLine, 0, true)).toHaveLength(0);
     expect(strokeToShapes([new THREE.Vector2(0, 0)], 10, false)).toHaveLength(0);
+  });
+});
+
+
+describe('insetShapes splitting', () => {
+  /** Two lobes joined by a neck, each lobe carrying a hole. */
+  function dumbbell(): THREE.Shape {
+    const shape = new THREE.Shape(
+      [
+        [0, 0], [40, 0], [40, 18], [60, 18], [60, 0], [100, 0],
+        [100, 40], [60, 40], [60, 22], [40, 22], [40, 40], [0, 40],
+      ].map(([x, y]) => new THREE.Vector2(x, y)),
+    );
+    for (const x of [10, 70]) {
+      shape.holes.push(
+        new THREE.Path([
+          new THREE.Vector2(x, 10),
+          new THREE.Vector2(x + 12, 10),
+          new THREE.Vector2(x + 12, 28),
+          new THREE.Vector2(x, 28),
+        ]),
+      );
+    }
+    return shape;
+  }
+
+  const inside = (pt: THREE.Vector2, poly: THREE.Vector2[]) => {
+    let hit = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i];
+      const b = poly[j];
+      if (a.y > pt.y !== b.y > pt.y && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) {
+        hit = !hit;
+      }
+    }
+    return hit;
+  };
+
+  /*
+   * Insetting can break one region into several, and the holes then belong to
+   * whichever piece contains them. Offsetting each ring on its own cannot know
+   * that, and handing every hole to every piece puts holes outside the outline
+   * that owns them — not a polygon at all, and it extrudes into a solid a
+   * slicer rejects as non-manifold.
+   */
+  it('keeps each hole with the piece that contains it when a shape splits', () => {
+    // The neck is 4 wide, so a 3-unit inset parts it.
+    const pieces = insetShapes([dumbbell()], 3);
+
+    expect(pieces.length).toBe(2);
+    for (const piece of pieces) {
+      expect(piece.holes).toHaveLength(1);
+      const outline = piece.extractPoints(1).shape;
+      for (const point of piece.holes[0].getPoints(1)) {
+        expect(inside(point, outline)).toBe(true);
+      }
+    }
+  });
+
+  it('still shrinks a plain shape by the requested amount', () => {
+    const [inset] = insetShapes([square(10)], 1);
+    const box = boundsOf(inset);
+    expect(box.min.x).toBeCloseTo(1, 2);
+    expect(box.max.x).toBeCloseTo(9, 2);
+  });
+});
+
+describe('normalizeShapes', () => {
+  /*
+   * The topmost layer is never cut against anything, and merging concatenates
+   * the shapes of every layer folded into it. Two overlapping solids in one
+   * mesh is what a slicer means by non-manifold.
+   */
+  it('merges overlapping regions into one', () => {
+    const overlapping = [square(20), square(20, 10, 0)];
+    const normalized = normalizeShapes(overlapping);
+
+    expect(normalized).toHaveLength(1);
+    // 20x20 plus 20x20 sharing a 10x20 strip.
+    expect(shapesArea(normalized)).toBeCloseTo(600, 2);
+  });
+
+  it('leaves regions that do not touch alone', () => {
+    const apart = [square(10), square(10, 50, 0)];
+    expect(shapesArea(normalizeShapes(apart))).toBeCloseTo(200, 3);
+  });
+
+  it('short-circuits a single shape', () => {
+    const one = [square(10)];
+    expect(normalizeShapes(one)).toBe(one);
   });
 });
