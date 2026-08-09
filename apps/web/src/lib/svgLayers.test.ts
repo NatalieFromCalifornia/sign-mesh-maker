@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
   averageColor,
+  clusterSimilarColors,
   colorDistance,
   documentOrder,
   groupLayersByColor,
@@ -310,5 +311,70 @@ describe('documentOrder', () => {
   it('is the identity permutation', () => {
     expect(documentOrder(4)).toEqual([0, 1, 2, 3]);
     expect(documentOrder(0)).toEqual([]);
+  });
+});
+
+
+describe('clusterSimilarColors', () => {
+  const layer = (color: string, size: number) => ({
+    color,
+    shapes: [
+      new THREE.Shape([
+        new THREE.Vector2(0, 0),
+        new THREE.Vector2(size, 0),
+        new THREE.Vector2(size, size),
+        new THREE.Vector2(0, size),
+      ]),
+    ],
+  });
+
+  /*
+   * The report: a sign that reads as three colours arrived as twelve layers.
+   * Artwork routinely carries fills that differ only by rounding — a shape
+   * recoloured a shade off, a flattened gradient, a round trip through another
+   * tool — and each one is otherwise a filament change and another step of
+   * height for a difference nobody can see.
+   */
+  it('folds fills that differ only by rounding', () => {
+    const navies = ['#0f2132', '#142434', '#0f2131', '#102232', '#102132', '#0d2031'];
+    const creams = ['#e5dac5', '#e7dcc7', '#e6dcc8', '#e6dbc7', '#e5dac6'];
+    const layers = [
+      ...navies.map((c, i) => layer(c, i === 0 ? 50 : 5)),
+      layer('#b9441c', 30),
+      ...creams.map((c, i) => layer(c, i === 0 ? 40 : 4)),
+    ];
+
+    const assigned = clusterSimilarColors(layers);
+
+    // Twelve fills, three printed colours.
+    expect(new Set(assigned).size).toBe(3);
+    // The largest region names its cluster, so the colour is one the artwork
+    // actually uses rather than an average that appears nowhere in it.
+    expect(new Set(assigned)).toEqual(new Set(['#0f2132', '#b9441c', '#e5dac5']));
+  });
+
+  /*
+   * The limit that keeps it honest. Cream lettering on a white panel is 19.82
+   * apart — close, and completely deliberate.
+   */
+  it('leaves a genuine distinction alone', () => {
+    const assigned = clusterSimilarColors([layer('#efebe4', 50), layer('#ffffff', 10)]);
+    expect(new Set(assigned).size).toBe(2);
+  });
+
+  it('leaves an ordinary palette untouched', () => {
+    const parsed = parseSvgLayers(HEX_SIGN_SVG);
+    const assigned = clusterSimilarColors(parsed.layers);
+    expect(assigned).toEqual(parsed.layers.map((l) => l.color));
+  });
+
+  it('folds near-identical blacks but keeps the colours apart', () => {
+    const assigned = clusterSimilarColors([
+      layer('#000000', 40),
+      layer('#010101', 5),
+      layer('#020202', 5),
+      layer('#ad130f', 20),
+    ]);
+    expect(assigned).toEqual(['#000000', '#000000', '#000000', '#ad130f']);
   });
 });

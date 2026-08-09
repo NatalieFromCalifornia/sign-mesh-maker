@@ -11,6 +11,7 @@ import { CropOverlay } from '../components/CropOverlay';
 import { cn } from '../lib/cn';
 import {
   averageColor,
+  clusterSimilarColors,
   documentOrder,
   groupLayersByColor,
   moveGroup,
@@ -100,6 +101,13 @@ export function Editor() {
    * remapping those in step, and a missed remap recolours the wrong region.
    */
   const [order, setOrder] = useState<number[]>([]);
+  /**
+   * The colour assignment the artwork arrived with — near-duplicate fills
+   * already folded together. Reset returns here rather than to the raw parse,
+   * because a dozen fills the eye reads as three is not a state anyone wants
+   * to be put back into.
+   */
+  const [baseAssigned, setBaseAssigned] = useState<string[]>([]);
   const [cropping, setCropping] = useState(false);
   /** Assigned colour per source layer, for previewing the uncropped artwork. */
   const assignedColors = useMemo(
@@ -209,6 +217,16 @@ export function Editor() {
     [order],
   );
 
+  /** Anything the user changed since the artwork was opened. */
+  const touched = useMemo(
+    () =>
+      reordered ||
+      deleted.size > 0 ||
+      assigned.length !== baseAssigned.length ||
+      assigned.some((color, i) => color !== baseAssigned[i]),
+    [reordered, deleted, assigned, baseAssigned],
+  );
+
   const reset = useCallback(() => {
     setGroup((current) => {
       if (current) disposeGroup(current);
@@ -221,6 +239,7 @@ export function Editor() {
     setStale(false);
     setHovered(null);
     setAssigned([]);
+    setBaseAssigned([]);
     setSelected(new Set());
     setDeleted(new Set());
     setOrder([]);
@@ -258,7 +277,6 @@ export function Editor() {
         setHovered(null);
         setFileName(file.name);
 
-        setAssigned([]);
         setSelected(new Set());
         setDeleted(new Set());
 
@@ -266,6 +284,15 @@ export function Editor() {
         const uploaded = parseSvgLayers(text);
         setParsed(uploaded);
         setOrder(documentOrder(uploaded.layers.length));
+
+        /*
+         * Fold fills that differ only by rounding. Real artwork routinely
+         * carries a dozen of them where the eye sees three, and each one would
+         * otherwise be a filament change for a difference nobody can see.
+         */
+        const folded = clusterSimilarColors(uploaded.layers);
+        setAssigned(folded);
+        setBaseAssigned(folded);
         setSvgText(text);
         setProjectId(null);
         setSavedAt(null);
@@ -436,7 +463,7 @@ export function Editor() {
   );
 
   const resetColors = useCallback(() => {
-    setAssigned([]);
+    setAssigned(baseAssigned);
     setSelected(new Set());
     // Reset restores deleted layers too: it is the one way back to the artwork
     // as uploaded, and leaving deletions behind would make that a lie.
@@ -444,7 +471,7 @@ export function Editor() {
     // Including the stacking, for the same reason.
     setOrder(parsed ? documentOrder(parsed.layers.length) : []);
     setStale(true);
-  }, [parsed]);
+  }, [parsed, baseAssigned]);
 
   /*
    * Rebuild automatically when the layer set changes — merging, recolouring or
@@ -541,7 +568,9 @@ export function Editor() {
         const byOriginal = new Map(
           project.config.layers.map((layer) => [layer.originalColor, layer.assignedColor]),
         );
-        setAssigned(restored.layers.map((layer) => byOriginal.get(layer.color) ?? layer.color));
+        const saved = restored.layers.map((layer) => byOriginal.get(layer.color) ?? layer.color);
+        setAssigned(saved);
+        setBaseAssigned(saved);
 
         /*
          * Stacking is the saved array's own order, restored by colour for the
@@ -1011,7 +1040,7 @@ export function Editor() {
                 Merge is always rendered, so nothing reflows in either axis.
               */}
               <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-rule pt-4">
-                {(assigned.length > 0 || deleted.size > 0 || reordered) && (
+                {touched && (
                   <Button size="sm" variant="ghost" onClick={resetColors}>
                     Reset
                   </Button>

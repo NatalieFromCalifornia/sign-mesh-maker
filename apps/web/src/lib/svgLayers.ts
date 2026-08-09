@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
-import { repairShapes, strokeToShapes } from './offset';
+import { repairShapes, shapesArea, strokeToShapes } from './offset';
 
 export interface SvgLayer {
   /** Fill color as `#rrggbb`, and the identity used to group regions. */
@@ -294,6 +294,62 @@ export function averageColor(colors: string[]): string {
     g: sum.g / colors.length,
     b: sum.b / colors.length,
   });
+}
+
+/**
+ * How close two fills have to be before they are treated as the same colour.
+ *
+ * Measured with `colorDistance`, so roughly perceptual and on a 0–255 scale.
+ * Ten sits in a wide empty gap in real artwork. A sign that looks
+ * three-coloured but carries twelve fills — the usual result of an export that
+ * lets colour drift — had every near-duplicate within 5.01 of its neighbour and
+ * nothing else closer than 93.99. The nearest genuine distinction found in any
+ * test artwork is a cream background against white lettering at 19.82, which
+ * this leaves well alone.
+ */
+export const SIMILAR_COLOR_DISTANCE = 10;
+
+/**
+ * Folds fills that are the same colour in all but rounding into one.
+ *
+ * Returns an assigned colour per layer, which is how merging is already
+ * expressed (§5.4) — so this needs no separate mechanism, shows up in the
+ * layer list as an ordinary merge, and Reset undoes it.
+ *
+ * Artwork routinely carries a dozen fills where the eye sees three: a shape
+ * gets recoloured a shade off, a gradient is flattened, a file makes a round
+ * trip through another tool. Printing those as separate layers is worse than
+ * pointless — each one is a filament change and another step of height for a
+ * difference nobody can see.
+ *
+ * The largest region in a cluster names it, rather than the average: that
+ * colour is the one the artwork actually uses, where an average is a colour
+ * that appears nowhere in it.
+ */
+export function clusterSimilarColors(
+  layers: SvgLayer[],
+  threshold = SIMILAR_COLOR_DISTANCE,
+): string[] {
+  const areas = layers.map((layer) => shapesArea(layer.shapes));
+
+  // Biggest first, so the dominant colour is the one that names its cluster.
+  const order = layers.map((_, i) => i).sort((a, b) => areas[b] - areas[a]);
+
+  const assigned = new Array<string>(layers.length);
+  for (const i of order) {
+    if (assigned[i]) continue;
+    const representative = layers[i].color;
+    assigned[i] = representative;
+
+    for (const j of order) {
+      if (assigned[j]) continue;
+      if (colorDistance(representative, layers[j].color) <= threshold) {
+        assigned[j] = representative;
+      }
+    }
+  }
+
+  return assigned;
 }
 
 export interface LayerGroup extends SvgLayer {
