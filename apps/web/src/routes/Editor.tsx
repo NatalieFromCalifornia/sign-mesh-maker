@@ -851,23 +851,6 @@ export function Editor() {
             <Panel
               title={`Layers · ${layers.length}`}
               description="Top of the stack first. Reorder, recolor, delete, or select two or more to merge."
-              actions={
-                <div className="flex shrink-0 gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={selected.size < 2}
-                    onClick={mergeSelected}
-                  >
-                    Merge
-                  </Button>
-                  {(assigned.length > 0 || deleted.size > 0 || reordered) && (
-                    <Button size="sm" variant="ghost" onClick={resetColors}>
-                      Reset
-                    </Button>
-                  )}
-                </div>
-              }
             >
               <ul className="flex flex-col">
                 {/*
@@ -1016,6 +999,33 @@ export function Editor() {
                   );
                 })}
               </ul>
+
+              {/*
+                Below the list, left-aligned, Merge first.
+                
+                These sat in the panel header, which right-aligns its actions —
+                so Reset appearing shoved Merge sideways, and the button moved
+                out from under the cursor exactly when a layer had just been
+                selected. Anchored to the left with Merge first, Reset extends
+                the row rightward instead and Merge never moves. Merge is always
+                rendered, disabled until there is something to merge, so the row
+                does not change height either.
+              */}
+              <div className="mt-4 flex flex-wrap gap-2 border-t border-rule pt-4">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={selected.size < 2}
+                  onClick={mergeSelected}
+                >
+                  Merge
+                </Button>
+                {(assigned.length > 0 || deleted.size > 0 || reordered) && (
+                  <Button size="sm" variant="ghost" onClick={resetColors}>
+                    Reset
+                  </Button>
+                )}
+              </div>
             </Panel>
 
             <div className="flex flex-col gap-3">

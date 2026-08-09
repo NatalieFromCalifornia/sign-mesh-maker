@@ -202,3 +202,44 @@ describe('flat preview', () => {
     expect(solid('#ad130f')).toBe(2);
   });
 });
+
+describe('layer actions', () => {
+  /*
+   * These sat in the panel header, which right-aligns its actions, so Reset
+   * appearing shoved Merge sideways — the button moved out from under the
+   * cursor exactly when a layer had just been selected.
+   *
+   * jsdom has no layout, so the position cannot be measured here. What can be
+   * pinned is the two things that make it stable: Merge is always rendered, so
+   * the row never changes height, and it comes first, so Reset extends the row
+   * away from it instead of pushing it.
+   */
+  const merge = () => screen.getByRole('button', { name: 'Merge' });
+  const reset = () => screen.queryByRole('button', { name: 'Reset' });
+
+  it('keeps Merge in place when Reset appears', async () => {
+    const user = await uploadArtwork();
+
+    expect(merge()).toBeInTheDocument();
+    expect(reset()).toBeNull();
+
+    const before = merge();
+    await user.click(moveButton('#2f9d8f', 'up'));
+
+    // Reset has appeared, and Merge is the very same element, still ahead of it.
+    expect(reset()).toBeInTheDocument();
+    expect(merge()).toBe(before);
+    expect(
+      merge().compareDocumentPosition(reset()!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('puts the actions below the layer list', async () => {
+    await uploadArtwork();
+    const list = screen.getAllByRole('list')[0];
+
+    expect(
+      list.compareDocumentPosition(merge()) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
