@@ -55,9 +55,18 @@ export interface ExportPart {
   positions: Float32Array;
 }
 
-/** Rounds to micrometres — finer than any printer resolves, and keeps files small. */
+/**
+ * Rounds to a hundredth of a micrometre.
+ *
+ * Finer than micrometres for a topological reason rather than a printing one:
+ * vertices are indexed by the coordinates as written, so two that round onto
+ * each other become one, and two boundaries that merely pass close by are
+ * stitched into a pinch — an edge with four faces on it, which is exactly the
+ * non-manifold a slicer refuses. Real geometry lands under half a micrometre
+ * apart often enough for that to matter.
+ */
 function num(value: number): string {
-  return (Math.round(value * 1000) / 1000).toString();
+  return (Math.round(value * 100000) / 100000).toString();
 }
 
 function escapeXml(value: string): string {

@@ -88,6 +88,13 @@ export function insetShapes(shapes: THREE.Shape[], amount: number): THREE.Shape[
  */
 function nest(rings: IntPoint[][]): THREE.Shape[] {
   const clipper = new Clipper();
+  /*
+   * Output that never touches itself at a point. Two lobes meeting at one
+   * vertex extrude into an edge shared by four faces, which is non-manifold
+   * and stops a slicer dead — and no amount of nudging afterwards separates
+   * them, because they are one vertex by then.
+   */
+  clipper.StrictlySimple = true;
   clipper.AddPaths(rings, PolyType.ptSubject, true);
 
   const tree = new PolyTree();
@@ -176,6 +183,13 @@ export function strokeToShapes(
    * border comes out as a filled slab.
    */
   const clipper = new Clipper();
+  /*
+   * Output that never touches itself at a point. Two lobes meeting at one
+   * vertex extrude into an edge shared by four faces, which is non-manifold
+   * and stops a slicer dead — and no amount of nudging afterwards separates
+   * them, because they are one vertex by then.
+   */
+  clipper.StrictlySimple = true;
   clipper.AddPaths(solution, PolyType.ptSubject, true);
 
   const tree = new PolyTree();
@@ -259,6 +273,13 @@ export function repairShapes(shapes: THREE.Shape[]): THREE.Shape[] {
     JS.ScaleUpPaths(paths, SCALE);
 
     const clipper = new Clipper();
+  /*
+   * Output that never touches itself at a point. Two lobes meeting at one
+   * vertex extrude into an edge shared by four faces, which is non-manifold
+   * and stops a slicer dead — and no amount of nudging afterwards separates
+   * them, because they are one vertex by then.
+   */
+  clipper.StrictlySimple = true;
     clipper.AddPaths(paths, PolyType.ptSubject, true);
 
     const tree = new PolyTree();
@@ -292,6 +313,13 @@ export function unionShapes(shapes: THREE.Shape[]): THREE.Shape[] {
   if (shapes.length <= 1) return shapes;
 
   const clipper = new Clipper();
+  /*
+   * Output that never touches itself at a point. Two lobes meeting at one
+   * vertex extrude into an edge shared by four faces, which is non-manifold
+   * and stops a slicer dead — and no amount of nudging afterwards separates
+   * them, because they are one vertex by then.
+   */
+  clipper.StrictlySimple = true;
 
   for (const shape of shapes) {
     const { shape: outline, holes } = shape.extractPoints(1);
@@ -332,6 +360,13 @@ export function subtractShapes(subject: THREE.Shape[], clip: THREE.Shape[]): THR
   if (subject.length === 0 || clip.length === 0) return subject;
 
   const clipper = new Clipper();
+  /*
+   * Output that never touches itself at a point. Two lobes meeting at one
+   * vertex extrude into an edge shared by four faces, which is non-manifold
+   * and stops a slicer dead — and no amount of nudging afterwards separates
+   * them, because they are one vertex by then.
+   */
+  clipper.StrictlySimple = true;
   addOriented(clipper, subject, PolyType.ptSubject);
   addOriented(clipper, clip, PolyType.ptClip);
 
@@ -404,6 +439,13 @@ export function intersectShapes(subject: THREE.Shape[], clip: THREE.Shape[]): TH
   if (subject.length === 0 || clip.length === 0) return [];
 
   const clipper = new Clipper();
+  /*
+   * Output that never touches itself at a point. Two lobes meeting at one
+   * vertex extrude into an edge shared by four faces, which is non-manifold
+   * and stops a slicer dead — and no amount of nudging afterwards separates
+   * them, because they are one vertex by then.
+   */
+  clipper.StrictlySimple = true;
   addOriented(clipper, subject, PolyType.ptSubject);
   addOriented(clipper, clip, PolyType.ptClip);
 

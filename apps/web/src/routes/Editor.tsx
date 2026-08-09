@@ -23,6 +23,7 @@ import {
 import {
   DEFAULT_FLAT_GAP_MM,
   FULL_CROP,
+  buildHeightBands,
   buildMesh,
   isFullCrop,
   disposeGroup,
@@ -695,6 +696,36 @@ export function Editor() {
     setSearchParams,
   ]);
 
+  /**
+   * A stepped sign exports as a stack of height bands, each in one colour.
+   *
+   * That is what Orca's height-range painting produces, and the only way to
+   * print a stepped sign on a machine with one extruder: the filament changes
+   * between bands rather than between regions. Built here rather than kept in
+   * state, because it is a second mesh of the same artwork and only an export
+   * ever needs it.
+   *
+   * Flat mode keeps its per-colour parts — every colour is at one height, so
+   * there are no bands to swap between, and its parts are what a multi-colour
+   * printer wants.
+   */
+  const export3mf = useCallback(() => {
+    if (!group) return;
+    const name = threeMfFilename(stlFilename(fileName ?? 'sign'));
+
+    if (config.flatMode || !effective) {
+      download3mf(group, name);
+      return;
+    }
+
+    const banded = buildHeightBands(effective, config);
+    try {
+      download3mf(banded.group, name);
+    } finally {
+      disposeGroup(banded.group);
+    }
+  }, [group, effective, config, fileName]);
+
   const update = useCallback((patch: Partial<MeshConfig>) => {
     setConfig((current) => ({ ...current, ...patch }));
     setStale(true);
@@ -1078,9 +1109,7 @@ export function Editor() {
               <Button
                 variant="secondary"
                 disabled={!group}
-                onClick={() =>
-                  group && download3mf(group, threeMfFilename(stlFilename(fileName ?? 'sign')))
-                }
+                onClick={export3mf}
               >
                 Download 3MF
               </Button>

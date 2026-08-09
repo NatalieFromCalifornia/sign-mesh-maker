@@ -6,6 +6,7 @@ import {
   cropParsed,
   isFullCrop,
   layerAssignments,
+  buildHeightBands,
   layerHeight,
   revealBuriedLayers,
   type MeshConfig,
@@ -431,37 +432,37 @@ describe('overlapping volume', () => {
  * heal — but a 3MF hands each colour over separately, and an unclosed one
  * slices into missing letters and floating-region warnings.
  */
-describe('watertight parts', () => {
-  /** Boundary edges: an edge used by one triangle is a hole in the surface. */
-  function openEdges(geometry: THREE.BufferGeometry): number {
-    const p = geometry.getAttribute('position').array as ArrayLike<number>;
-    const counts = new Map<string, number>();
+function openEdgesOf(geometry: THREE.BufferGeometry): number {
+  const p = geometry.getAttribute('position').array as ArrayLike<number>;
+  const counts = new Map<string, number>();
 
-    for (let t = 0; t < p.length / 9; t++) {
-      const i = t * 9;
-      // Exact identity, not a rounded bucket: shared vertices are written from
-      // the same coordinate, and rounding invents mismatches at bucket edges.
-      const k = [0, 1, 2].map((n) => `${p[i + n * 3]},${p[i + n * 3 + 1]},${p[i + n * 3 + 2]}`);
-      for (let e = 0; e < 3; e++) {
-        const a = k[e];
-        const b = k[(e + 1) % 3];
-        if (a === b) continue;
-        const edge = a < b ? `${a}|${b}` : `${b}|${a}`;
-        counts.set(edge, (counts.get(edge) ?? 0) + 1);
-      }
+  for (let t = 0; t < p.length / 9; t++) {
+    const i = t * 9;
+    // Exact identity, not a rounded bucket: shared vertices are written from
+    // the same coordinate, and rounding invents mismatches at bucket edges.
+    const k = [0, 1, 2].map((n) => `${p[i + n * 3]},${p[i + n * 3 + 1]},${p[i + n * 3 + 2]}`);
+    for (let e = 0; e < 3; e++) {
+      const a = k[e];
+      const b = k[(e + 1) % 3];
+      if (a === b) continue;
+      const edge = a < b ? `${a}|${b}` : `${b}|${a}`;
+      counts.set(edge, (counts.get(edge) ?? 0) + 1);
     }
-
-    let open = 0;
-    for (const [, n] of counts) if (n === 1) open++;
-    return open;
   }
 
-  const partsOf = (group: THREE.Group) =>
-    group.children.map((child) => ({
-      name: child.name,
-      open: openEdges((child as THREE.Mesh).geometry),
-    }));
+  let open = 0;
+  for (const [, n] of counts) if (n === 1) open++;
+  return open;
+}
 
+
+const partsOf = (group: THREE.Group) =>
+  group.children.map((child) => ({
+    name: child.name,
+    open: openEdgesOf((child as THREE.Mesh).geometry),
+  }));
+
+describe('watertight parts', () => {
   /*
    * Text on a panel is the case that broke it. Cutting the glyphs out of the
    * background leaves holes whose baselines are exactly collinear, and earcut
@@ -544,3 +545,60 @@ function rectShape2(x: number, y: number, w: number, h: number) {
     new THREE.Vector2(x, y + h),
   ]);
 }
+
+
+/*
+ * A stepped sign is layered by height, so it can print as a stack of bands
+ * with the filament swapped between them — which is what Orca's height-range
+ * painting produces, and the only way to print one on a single extruder.
+ */
+describe('buildHeightBands', () => {
+  const sign = () => parseSvgLayers(HEX_SIGN_SVG);
+
+  it('makes one band per layer, spanning that layer\'s step', () => {
+    const { group } = buildHeightBands(sign(), CONFIG);
+    expect(group.children).toHaveLength(3);
+
+    group.children.forEach((child, k) => {
+      const box = new THREE.Box3().setFromObject(child);
+      expect(box.min.z).toBeCloseTo(k === 0 ? 0 : layerHeight(k - 1, CONFIG), 5);
+      expect(box.max.z).toBeCloseTo(layerHeight(k, CONFIG), 5);
+    });
+  });
+
+  it('names each band for the colour that band prints in', () => {
+    const { group } = buildHeightBands(sign(), CONFIG);
+    expect(group.children.map((c) => c.name)).toEqual(sign().layers.map((l) => l.color));
+  });
+
+  /*
+   * A band holds every layer that reaches above it, so its exposed top is
+   * exactly that layer's own region — which is what makes the visible colours
+   * come out right.
+   */
+  it('widens downward, each band covering everything above it', () => {
+    const { group } = buildHeightBands(sign(), CONFIG);
+
+    const width = (i: number) => {
+      const box = new THREE.Box3().setFromObject(group.children[i]);
+      return box.max.x - box.min.x;
+    };
+
+    expect(width(0)).toBeGreaterThan(width(1));
+    expect(width(1)).toBeGreaterThanOrEqual(width(2));
+  });
+
+  it('reaches the same overall height as the stepped mesh', () => {
+    expect(buildHeightBands(sign(), CONFIG).sizeMm.depth).toBeCloseTo(
+      buildMesh(sign(), CONFIG).sizeMm.depth,
+      5,
+    );
+  });
+
+  it('closes every band', () => {
+    const { group } = buildHeightBands(sign(), CONFIG);
+    for (const part of partsOf(group)) {
+      expect(`${part.name} open=${part.open}`).toBe(`${part.name} open=0`);
+    }
+  });
+});

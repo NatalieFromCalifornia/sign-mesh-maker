@@ -213,7 +213,11 @@ export function revealBuriedLayers(layers: SvgLayer[]): SvgLayer[] {
  */
 const MIN_PRINTABLE_MM2 = 0.01;
 
-function breakTriangulationTies(shapes: THREE.Shape[], epsilon: number): THREE.Shape[] {
+function breakTriangulationTies(
+  shapes: THREE.Shape[],
+  epsilon: number,
+  pinchGap: number,
+): THREE.Shape[] {
   if (epsilon <= 0) return shapes;
 
   const hash = (x: number, y: number, salt: number) => {
@@ -221,12 +225,40 @@ function breakTriangulationTies(shapes: THREE.Shape[], epsilon: number): THREE.S
     return (h - Math.floor(h) - 0.5) * epsilon;
   };
 
-  const move = (points: THREE.Vector2[]) =>
-    points.map(
-      (p) => new THREE.Vector2(p.x + hash(p.x, p.y, 0), p.y + hash(p.x, p.y, 1.618)),
-    );
+  /*
+   * A clipped region can touch itself at a single point — two lobes of one
+   * shape meeting, or two separate shapes of the same layer meeting. Both
+   * then build a wall along the very same edge, and an edge with four faces
+   * on it is non-manifold: a slicer will not take it.
+   *
+   * Since coincident coordinates are nudged identically, a pinch stays
+   * pinched. Counting repeats across everything being extruded together and
+   * pushing each later one a little further opens the pinch into a neck too
+   * thin to measure, while a point that appears once — including one shared
+   * with a neighbouring layer — still lands exactly where it did.
+   */
+  const seen = new Map<string, number>();
 
   return shapes.map((shape) => {
+    const move = (points: THREE.Vector2[]) =>
+      points.map((p) => {
+        const key = `${p.x},${p.y}`;
+        const repeat = seen.get(key) ?? 0;
+        seen.set(key, repeat + 1);
+
+        /*
+         * Wide enough to survive the export, which writes micrometres: a
+         * separation finer than that rounds back onto itself and the pinch
+         * returns in the file even though the mesh in hand is sound. Four
+         * micrometres is a hundredth of a layer line.
+         */
+        const nudge = repeat === 0 ? epsilon : pinchGap * repeat;
+        return new THREE.Vector2(
+          p.x + hash(p.x, p.y, 0) * (nudge / epsilon),
+          p.y + hash(p.x, p.y, 1.618) * (nudge / epsilon),
+        );
+      });
+
     const { shape: outline, holes } = shape.extractPoints(1);
     const next = new THREE.Shape(move(outline));
     for (const hole of holes) next.holes.push(new THREE.Path(move(hole)));
@@ -282,15 +314,17 @@ export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
 
   /** Clipping debris, in the shapes' own units. */
   const minArea = scale > 0 ? MIN_PRINTABLE_MM2 / (scale * scale) : 0;
+  /** Four micrometres of printed sign, in the shapes' own units. */
+  const pinchGap = scale > 0 ? 0.004 / scale : tieBreak;
 
   const addMesh = (shapes: THREE.Shape[], depth: number, color: string, zOffset = 0) => {
     const printable = shapes.filter((shape) => shapesArea([shape]) > minArea);
     if (printable.length === 0) return;
 
-    const geometry = new THREE.ExtrudeGeometry(breakTriangulationTies(printable, tieBreak), {
-      depth,
-      bevelEnabled: false,
-    });
+    const geometry = new THREE.ExtrudeGeometry(
+      breakTriangulationTies(printable, tieBreak, pinchGap),
+      { depth, bevelEnabled: false },
+    );
     geometry.scale(scale, scale, 1);
     if (zOffset !== 0) geometry.translate(0, 0, zOffset);
 
@@ -427,6 +461,89 @@ export function buildMesh(source: ParsedSvg, config: MeshConfig): BuiltMesh {
     sizeMm: { width: size.x, height: size.y, depth: size.z },
     triangles,
   };
+}
+
+/**
+ * The sign sliced into one solid per height band, for a stepped export.
+ *
+ * A stepped sign is already layered by height — layer `i` finishes at
+ * `base + i × step` — so the whole thing can be printed as a stack of bands,
+ * each in one colour, swapping filament between them. That is what Orca's
+ * height-range painting does, and it is the only way to print a sign like this
+ * on a machine with a single extruder.
+ *
+ * Cutting the geometry into bands rather than painting the triangles of one
+ * mesh reaches the same result through the mechanism that already works here:
+ * each band is a part bound to its own extruder, exactly as each colour is
+ * today. Painting instead would mean writing Orca's `paint_color` — a
+ * subdivision tree serialized into a bitstream, undocumented, and silently
+ * ignored if it is wrong.
+ *
+ * Band `k` holds every layer that reaches above it, which is layers `k`
+ * upward, so its exposed top is precisely layer `k`'s own region: the visible
+ * colours come out right, and the walls stripe through the colours beneath
+ * them the way a height-painted print does.
+ *
+ * Flat mode has no bands to speak of — every colour is at one height — and
+ * keeps its per-colour parts.
+ */
+export function buildHeightBands(source: ParsedSvg, config: MeshConfig): BuiltMesh {
+  const cropped = cropParsed(source, config.crop);
+  const parsed: ParsedSvg = { ...cropped, layers: revealBuriedLayers(cropped.layers) };
+
+  const scale = config.widthMm / parsed.width;
+  const group = new THREE.Group();
+  let triangles = 0;
+
+  const minArea = scale > 0 ? MIN_PRINTABLE_MM2 / (scale * scale) : 0;
+  const tieBreak = Math.max(parsed.width, parsed.height) * 1e-7;
+  const pinchGap = scale > 0 ? 0.004 / scale : tieBreak;
+
+  /*
+   * Accumulated from the top down, so each band folds one more layer into the
+   * result already computed rather than unioning everything above it again.
+   */
+  const footprints: THREE.Shape[][] = new Array(parsed.layers.length);
+  let reaching: THREE.Shape[] = [];
+  for (let k = parsed.layers.length - 1; k >= 0; k--) {
+    reaching = unionShapes([...parsed.layers[k].shapes, ...reaching]);
+    footprints[k] = reaching;
+  }
+
+  parsed.layers.forEach((layer, k) => {
+    const bottom = k === 0 ? 0 : layerHeight(k - 1, config);
+    const depth = layerHeight(k, config) - bottom;
+    if (depth <= 0) return;
+
+    const printable = footprints[k].filter((shape) => shapesArea([shape]) > minArea);
+    if (printable.length === 0) return;
+
+    const geometry = new THREE.ExtrudeGeometry(
+      breakTriangulationTies(printable, tieBreak, pinchGap),
+      { depth, bevelEnabled: false },
+    );
+    geometry.scale(scale, scale, 1);
+    geometry.translate(0, 0, bottom);
+
+    const mesh = new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ color: new THREE.Color(layer.color), roughness: 0.62 }),
+    );
+    mesh.name = layer.color;
+    group.add(mesh);
+    triangles += geometry.getAttribute('position').count / 3;
+  });
+
+  // Centred on the bed, like the mesh the viewer shows.
+  const box = new THREE.Box3().setFromObject(group);
+  const center = box.getCenter(new THREE.Vector3());
+  for (const child of group.children) {
+    child.position.x -= center.x;
+    child.position.y -= center.y;
+  }
+
+  const size = box.getSize(new THREE.Vector3());
+  return { group, sizeMm: { width: size.x, height: size.y, depth: size.z }, triangles };
 }
 
 /** Restricts artwork to the crop window, leaving it untouched when there is none. */

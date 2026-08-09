@@ -65,6 +65,12 @@ declare module 'clipper-lib' {
 
   export class Clipper {
     constructor(initOptions?: number);
+    /**
+     * Forces output polygons that never touch themselves or each other at a
+     * point. Costs time; without it two lobes can meet at one vertex, which
+     * extrudes into an edge with four faces on it.
+     */
+    StrictlySimple: boolean;
     AddPaths(paths: IntPoint[][], polyType: PolyType, closed: boolean): boolean;
     Execute(
       clipType: ClipType,
